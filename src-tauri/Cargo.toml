@@ -1,6 +1,6 @@
 [package]
 name = "m3e-canvas"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sketch Material 3 Expressive screens and turn them into vibe-coding prompts."
 edition = "2021"
 

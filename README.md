@@ -34,6 +34,28 @@
 
 Works with any AI coding tool that takes a prompt, such as Claude Code, Codex, Gemini CLI or Cursor: copy the prompt, paste it into the tool, and ask for the app.
 
+## What this fork adds
+
+This fork (maintained at [Mobai0z0/m3e-canvas](https://github.com/Mobai0z0/m3e-canvas)) extends the original [lnkiai/m3e-canvas](https://github.com/lnkiai/m3e-canvas) with a **desktop app and a real-project import feature**:
+
+- **Desktop app (Tauri v2)** – run the editor as a native Windows / macOS / Linux app (`npm run tauri:dev` / `npm run tauri:build`). The backend adds a fast directory scanner (prunes `node_modules`, `.git`, `target`, …, normalizes Windows paths) and a folder picker.
+- **Import a real project onto the canvas** – point the Project panel at any frontend codebase and it detects the stack from `package.json` (Next.js App/Pages Router, React, Vue, Svelte, Solid, Angular) or `pubspec.yaml` (Flutter), finds the pages/screens (`app/**/page.tsx`, `src/views/**`, `lib/**/*_screen.dart`, …), parses them (Babel for JSX/TSX, a template parser for `.vue`/`.svelte`/`.html`, a string-aware Dart scanner for Flutter widget trees), and maps the widgets it knows (MUI, Ant Design, Chakra, shadcn/ui, generic HTML, and 40+ Flutter Material widgets) onto canvas parts. Unknown components can be mapped by hand (`MyButton=button`, one per line).
+- **Flutter labels come out as real text** – `Text(l10n.someKey)` is resolved through the project's `.arb` translations (Chinese preferred, English fallback), so imported Flutter screens show actual UI strings instead of key names.
+- **Imports land where they belong** – every parsed screen becomes a frame and its groups flow inside that frame; a screen with too many parts continues on extra frames named `Name · 2` instead of being cut off.
+- **Stays smooth with big imports** – frames outside the viewport skip rendering their parts, so importing ~90 screens keeps panning and zooming fluid.
+- **A new sky-blue app icon** – the in-app logo mark regenerates every bundle icon (Windows `.ico`, macOS `.icns`, Appx/iOS/Android) via `scripts/gen_icons.py` + `tauri icon`.
+- **Release builds from CI** – pushing a `v*` tag runs a GitHub Action that builds the desktop installers for Windows, macOS (Apple Silicon + Intel) and Linux and attaches them to a draft GitHub Release.
+
+本 Fork（[Mobai0z0/m3e-canvas](https://github.com/Mobai0z0/m3e-canvas)）在原项目 [lnkiai/m3e-canvas](https://github.com/lnkiai/m3e-canvas) 基础上新增了**桌面应用**与**真实项目导入**两大能力：
+
+- **Tauri v2 桌面端**：以原生应用运行（`npm run tauri:dev` / `npm run tauri:build`），后端含目录扫描（跳过 `node_modules`/`.git`/`target` 等，Windows 路径归一化）与文件夹选择。
+- **把真实项目导入画布**：读取 `package.json`（Next/React/Vue/Svelte/Solid/Angular）或 `pubspec.yaml`（Flutter）识别框架，定位页面文件（`app/**/page.tsx`、`src/views/**`、`lib/**/*_screen.dart` 等），解析成组件树（Babel 解析 JSX/TSX、模板解析器处理 `.vue`/`.svelte`/`.html`、字符串感知的 Dart 扫描器解析 Flutter Widget 树），并把已知组件（MUI、Ant Design、Chakra、shadcn/ui、通用 HTML 及 40+ Flutter Material 组件）映射为画布部件；未知组件可手动映射（`MyButton=button`，每行一条）。
+- **Flutter 文案还原为真实文本**：`Text(l10n.someKey)` 会通过项目的 `.arb` 翻译文件解析（优先中文，英文兜底），导入的 Flutter 屏幕显示真实界面文字而非键名。
+- **导入自动归位**：每个解析出的屏幕对应一个画布屏幕框，组件组按真实尺寸流入框内；内容过多时自动生成 `名称 · 2` 续页屏幕，不截断。
+- **大量导入不卡顿**：视口外的屏幕不渲染内部组件，导入约 90 个屏幕仍能流畅平移缩放。
+- **全新天蓝色应用图标**：`scripts/gen_icons.py` + `tauri icon` 从应用内 Logo 一键重生成全部打包图标（Windows `.ico`、macOS `.icns`、Appx/iOS/Android）。
+- **CI 自动发布**：推送 `v*` 标签即触发 GitHub Action，为 Windows、macOS（Apple Silicon + Intel）、Linux 构建桌面安装包并挂到 GitHub Release。
+
 ## What it does
 
 - **Drag-and-drop parts** – buttons, icon buttons, FABs, split buttons, FAB menus, chips, app bars, navigation bars, floating toolbars, tabs, search bars, cards, lists, dialogs, snackbars, text fields, dropdowns, switches, checkboxes, radio buttons, sliders, text, images, camera and map placeholders, badges, boxes and dividers, all drawn to Material 3 Expressive.
@@ -82,6 +104,13 @@ Works with any AI coding tool that takes a prompt, such as Claude Code, Codex, G
 npm install
 npm run dev        # http://localhost:3000
 npm run build      # static export to ./out
+```
+
+Desktop app (this fork):
+
+```bash
+npm run tauri:dev     # run the Tauri desktop app in dev mode
+npm run tauri:build   # build installers into src-tauri/target/release/bundle
 ```
 
 The app is a static Next.js export. To host it under a sub-path (for example a GitHub Pages project site), set `NEXT_PUBLIC_BASE_PATH=/your-repo` at build time. `.github/workflows/deploy.yml` does this automatically and publishes `out/` to GitHub Pages on every push to `main`.
