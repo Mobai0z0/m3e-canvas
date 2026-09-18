@@ -124,6 +124,24 @@ describe("detectScreens for flutter", () => {
     expect(screens).toEqual(["lib/main.dart", "lib/home_page.dart", "lib/screens/profile_screen.dart", "lib/data/user_view.dart"]);
   });
 
+  it("finds pages inside workspace packages (packages/*/lib)", () => {
+    const screens = detectScreens(
+      tree([
+        "packages/manga_colorizer_cli/lib/src/sample_page.dart",
+        "packages/app/lib/main.dart",
+        "packages/app/lib/screens/home_screen.dart",
+        "packages/cli/bin/run.dart",
+        "DELIVERY/tools/paint.dart",
+      ]),
+      "flutter" as Framework,
+    );
+    expect(screens).toEqual([
+      "packages/manga_colorizer_cli/lib/src/sample_page.dart",
+      "packages/app/lib/main.dart",
+      "packages/app/lib/screens/home_screen.dart",
+    ]);
+  });
+
   it("excludes non-page dart files", () => {
     const screens = detectScreens(tree(["lib/models/user.dart", "lib/utils.dart"]), "flutter" as Framework);
     expect(screens).toEqual([]);

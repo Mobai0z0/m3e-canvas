@@ -246,7 +246,7 @@ export async function importProject(
   rootPath: string,
   customMappings?: Record<string, { kind: string; labelProp?: string }>,
 ): Promise<ImportResult> {
-  const fileTree = await readFileTreeRecursive(rootPath, 6);
+  const fileTree = await readFileTreeRecursive(rootPath, 8);
 
   // Find and read package.json (paths normalized: backend may use backslashes on Windows)
   const pkgEntry = fileTree.entries.find((e) => {

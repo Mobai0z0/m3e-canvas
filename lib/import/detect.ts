@@ -122,14 +122,17 @@ export function detectScreens(fileTree: FileTree, framework: Framework): string[
         screens.push(entry.path);
       }
     } else if (framework === "flutter") {
-      // Flutter: lib/**/*_page.dart, *_screen.dart, *_view.dart,
-      // files directly under lib/screens|pages|views/, and main.dart
-      if (p.startsWith("lib/") && p.endsWith(".dart")) {
-        if (p.match(/(_page|_screen|_view)\.dart$/)) {
+      // Flutter: any package's lib/ (root project or workspace packages/*/lib),
+      // page/screen/view files anywhere under it, files directly under
+      // lib/screens|pages|views/, and the package's main.dart
+      const m = p.match(/(?:^|\/)(lib\/.*)$/);
+      if (m && m[1].endsWith(".dart")) {
+        const inLib = m[1]; // "lib/..."
+        if (inLib.match(/(_page|_screen|_view)\.dart$/)) {
           screens.push(entry.path);
-        } else if (p.match(/^lib\/(screens|pages|views)\//)) {
+        } else if (inLib.match(/^lib\/(screens|pages|views)\//)) {
           screens.push(entry.path);
-        } else if (p === "lib/main.dart") {
+        } else if (inLib === "lib/main.dart") {
           screens.push(entry.path);
         }
       }

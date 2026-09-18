@@ -34,6 +34,7 @@ const UI = {
     refresh: "更新",
     notDesktop: "この機能はデスクトップアプリでのみ使用できます",
     noScreens: "画面が検出されませんでした",
+    noFlutterUi: "純粋な Dart プロジェクト（CLI/バックエンド）で、Flutter UI ページが見つかりません",
     customMap: "カスタムコンポーネントマッピング",
     customMapHint: "コンポーネント名=種類 (1行1つ)",
     reimport: "再インポート",
@@ -52,6 +53,7 @@ const UI = {
     refresh: "Refresh",
     notDesktop: "This feature requires the desktop app",
     noScreens: "No screens detected",
+    noFlutterUi: "Pure Dart project (CLI/backend) — no Flutter UI pages found",
     customMap: "Custom Component Mapping",
     customMapHint: "ComponentName=kind (one per line)",
     reimport: "Re-import",
@@ -70,6 +72,7 @@ const UI = {
     refresh: "刷新",
     notDesktop: "此功能仅在桌面应用中可用",
     noScreens: "未检测到页面",
+    noFlutterUi: "这是纯 Dart 工程（CLI/后端），没有 Flutter UI 页面",
     customMap: "自定义组件映射",
     customMapHint: "组件名=类型（每行一个）",
     reimport: "重新导入",
@@ -88,6 +91,7 @@ const UI = {
     refresh: "새로고침",
     notDesktop: "이 기능은 데스크톱 앱에서만 사용할 수 있습니다",
     noScreens: "화면이 감지되지 않음",
+    noFlutterUi: "순수 Dart 프로젝트(CLI/백엔드)로 Flutter UI 페이지가 없습니다",
     customMap: "사용자 정의 컴포넌트 매핑",
     customMapHint: "컴포넌트명=종류 (한 줄에 하나)",
     reimport: "다시 가져오기",
@@ -318,6 +322,9 @@ export function ProjectPanel({ lang, palette: p, onImport }: Props) {
           </div>
           {importResult.screens.length === 0 && (
             <div style={{ marginTop: 4, color: p.error }}>{t.noScreens}</div>
+          )}
+          {importResult.screens.length === 0 && importResult.projectInfo.framework === "flutter" && (
+            <div style={{ marginTop: 2, fontSize: 11, color: p.onSurfaceVariant }}>{t.noFlutterUi}</div>
           )}
         </div>
       )}
