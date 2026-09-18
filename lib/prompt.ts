@@ -54,6 +54,8 @@ import {
   carouselCardsOf,
   TOP_BAR_SIZES,
   topBarHeightOf,
+  ProjectContext,
+  EditMode,
 } from "./tokens";
 
 const VARIANT_TEXT: Record<Lang, Record<Variant, string>> = {
@@ -1794,3 +1796,201 @@ export function buildPrompt(doc: Doc, widths: Record<string, number>, onlyFrameI
 
 /** the prompt to hand out: the author's edited text when there is one, otherwise the generated one */
 export const effectivePrompt = (doc: Doc, widths: Record<string, number>, lang: Lang = getLang()): string => (doc.promptEdit !== undefined ? doc.promptEdit : buildPrompt(doc, widths, undefined, lang));
+
+// ─── Edit-mode prompt ───
+// When a project is imported, the prompt switches from "create everything" to
+// "here is the project context; make only these changes." buildEditPrompt emits
+// a concise brief that lists the project's framework, the files touched, and
+// per-screen change instructions (new / modify / remove).
+
+const EDIT_PH: Record<Lang, {
+  intro: (title: string, ctx: ProjectContext) => string;
+  ctxFramework: string;
+  ctxUiLib: string;
+  ctxRouter: string;
+  ctxTs: string;
+  ctxFiles: string;
+  hChanges: string;
+  screenNew: (name: string, file?: string) => string;
+  screenModify: (name: string, file?: string) => string;
+  screenRemove: (name: string, file?: string) => string;
+  itemNew: (label: string, kind: string) => string;
+  itemModify: (label: string, kind: string) => string;
+  itemRemove: (label: string, kind: string) => string;
+  noChanges: string;
+}> = {
+  ja: {
+    intro: (title, ctx) => `既存のプロジェクト「${title}」を編集します。プロジェクトルート: ${ctx.rootPath}`,
+    ctxFramework: "フレームワーク",
+    ctxUiLib: "UIライブラリ",
+    ctxRouter: "ルーター",
+    ctxTs: "TypeScript",
+    ctxFiles: "画面ファイル",
+    hChanges: "変更内容",
+    screenNew: (n, f) => `### 新規画面: ${n}${f ? ` (${f})` : ""}`,
+    screenModify: (n, f) => `### 変更: ${n}${f ? ` (${f})` : ""}`,
+    screenRemove: (n, f) => `### 削除: ${n}${f ? ` (${f})` : ""}`,
+    itemNew: (l, k) => `- 新規: ${k}「${l}」`,
+    itemModify: (l, k) => `- 変更: ${k}「${l}」`,
+    itemRemove: (l, k) => `- 削除: ${k}「${l}」`,
+    noChanges: "変更はありません。",
+  },
+  en: {
+    intro: (title, ctx) => `Edit the existing project "${title}". Project root: ${ctx.rootPath}`,
+    ctxFramework: "Framework",
+    ctxUiLib: "UI library",
+    ctxRouter: "Router",
+    ctxTs: "TypeScript",
+    ctxFiles: "Screen files",
+    hChanges: "Changes",
+    screenNew: (n, f) => `### New screen: ${n}${f ? ` (${f})` : ""}`,
+    screenModify: (n, f) => `### Modify: ${n}${f ? ` (${f})` : ""}`,
+    screenRemove: (n, f) => `### Remove: ${n}${f ? ` (${f})` : ""}`,
+    itemNew: (l, k) => `- Add: ${k} "${l}"`,
+    itemModify: (l, k) => `- Change: ${k} "${l}"`,
+    itemRemove: (l, k) => `- Remove: ${k} "${l}"`,
+    noChanges: "No changes.",
+  },
+  zh: {
+    intro: (title, ctx) => `编辑现有项目「${title}」。项目根目录：${ctx.rootPath}`,
+    ctxFramework: "框架",
+    ctxUiLib: "UI 库",
+    ctxRouter: "路由",
+    ctxTs: "TypeScript",
+    ctxFiles: "页面文件",
+    hChanges: "变更内容",
+    screenNew: (n, f) => `### 新增页面：${n}${f ? `（${f}）` : ""}`,
+    screenModify: (n, f) => `### 修改：${n}${f ? `（${f}）` : ""}`,
+    screenRemove: (n, f) => `### 删除：${n}${f ? `（${f}）` : ""}`,
+    itemNew: (l, k) => `- 新增：${k}「${l}」`,
+    itemModify: (l, k) => `- 修改：${k}「${l}」`,
+    itemRemove: (l, k) => `- 删除：${k}「${l}」`,
+    noChanges: "无变更。",
+  },
+  ko: {
+    intro: (title, ctx) => `기존 프로젝트 "${title}" 편집. 프로젝트 루트: ${ctx.rootPath}`,
+    ctxFramework: "프레임워크",
+    ctxUiLib: "UI 라이브러리",
+    ctxRouter: "라우터",
+    ctxTs: "TypeScript",
+    ctxFiles: "화면 파일",
+    hChanges: "변경 내용",
+    screenNew: (n, f) => `### 새 화면: ${n}${f ? ` (${f})` : ""}`,
+    screenModify: (n, f) => `### 수정: ${n}${f ? ` (${f})` : ""}`,
+    screenRemove: (n, f) => `### 삭제: ${n}${f ? ` (${f})` : ""}`,
+    itemNew: (l, k) => `- 추가: ${k} "${l}"`,
+    itemModify: (l, k) => `- 변경: ${k} "${l}"`,
+    itemRemove: (l, k) => `- 삭제: ${k} "${l}"`,
+    noChanges: "변경 사항 없음.",
+  },
+};
+
+export function buildEditPrompt(doc: Doc, widths: Record<string, number>, lang: Lang = getLang()): string {
+  const ctx = doc.projectContext;
+  if (!ctx) return buildPrompt(doc, widths, undefined, lang);
+
+  const ph = EDIT_PH[lang];
+  const lines: string[] = [];
+  const title = doc.title.trim() || ctx.framework;
+
+  lines.push(ph.intro(title, ctx));
+  lines.push("");
+  lines.push(`**${ph.ctxFramework}**: ${ctx.framework}`);
+  lines.push(`**${ph.ctxUiLib}**: ${ctx.uiLib}`);
+  lines.push(`**${ph.ctxRouter}**: ${ctx.router}`);
+  if (ctx.typescript) lines.push(`**${ph.ctxTs}**: ✓`);
+  if (ctx.screens.length > 0) {
+    lines.push(`**${ph.ctxFiles}**:`);
+    for (const s of ctx.screens) lines.push(`  - ${s.name} → \`${s.path}\``);
+  }
+
+  lines.push("");
+  lines.push(`## ${ph.hChanges}`);
+
+  // Collect changes per frame
+  const phone = doc.frame === "phone";
+  const allFrames = phone ? doc.frames : [];
+  const groups = doc.groups.flatMap((g) => explodeGroup(g, widths));
+
+  // Group items by frame
+  const byFrame = new Map<string, typeof groups>();
+  for (const g of groups) {
+    const f = frameOfGroup(g, allFrames, widths);
+    const fid = f?.id ?? "__loose__";
+    byFrame.set(fid, [...(byFrame.get(fid) ?? []), g]);
+  }
+
+  let hasChanges = false;
+
+  // Frame-level changes
+  for (const f of allFrames) {
+    const mode = f.editMode;
+    if (!mode) continue;
+    hasChanges = true;
+    lines.push("");
+    if (mode === "new") lines.push(ph.screenNew(f.name || f.id, f.linkedFile));
+    else if (mode === "modify") lines.push(ph.screenModify(f.name || f.id, f.linkedFile));
+    else if (mode === "remove") lines.push(ph.screenRemove(f.name || f.id, f.linkedFile));
+
+    if (mode === "remove") continue;
+
+    // Item-level changes within this frame
+    const gs = byFrame.get(f.id) ?? [];
+    for (const g of gs) {
+      for (const it of g.items) {
+        const imode = it.editMode;
+        if (!imode) continue;
+        hasChanges = true;
+        const label = it.label || it.kind;
+        if (imode === "new") lines.push(ph.itemNew(label, it.kind));
+        else if (imode === "modify") lines.push(ph.itemModify(label, it.kind));
+        else if (imode === "remove") lines.push(ph.itemRemove(label, it.kind));
+      }
+    }
+
+    // If the frame has no item-level changes but is new/modify, describe the full screen
+    const itemChanges = gs.flatMap((g) => g.items.filter((it) => it.editMode));
+    if (itemChanges.length === 0) {
+      // Include the full screen description from buildPrompt
+      const screenPrompt = buildPrompt(doc, widths, f.id, lang);
+      const screenLines = screenPrompt.split("\n").filter((l) => l.trim() && !l.startsWith("#") && !l.startsWith("**"));
+      lines.push(...screenLines.slice(0, 20));
+    }
+  }
+
+  // Loose items (not attached to any frame)
+  const loose = byFrame.get("__loose__") ?? [];
+  for (const g of loose) {
+    for (const it of g.items) {
+      if (!it.editMode) continue;
+      hasChanges = true;
+      const label = it.label || it.kind;
+      if (it.editMode === "new") lines.push(ph.itemNew(label, it.kind));
+      else if (it.editMode === "modify") lines.push(ph.itemModify(label, it.kind));
+      else if (it.editMode === "remove") lines.push(ph.itemRemove(label, it.kind));
+    }
+  }
+
+  if (!hasChanges) lines.push(ph.noChanges);
+
+  lines.push("");
+  lines.push("---");
+  lines.push(lang === "ja" ? "上記の変更のみを適用してください。既存のコードは保持し、記載された画面とコンポーネントのみを変更してください。" :
+    lang === "zh" ? "请仅应用上述变更。保留现有代码，只修改列出的页面和组件。" :
+    lang === "ko" ? "위 변경 사항만 적용하세요. 기존 코드를 유지하고 나열된 화면과 컴포넌트만 수정하세요." :
+    "Apply only the changes above. Keep existing code intact and modify only the listed screens and components.");
+
+  return lines.join("\n");
+}
+
+/** returns true if the doc has any edit-mode markers (new/modify/remove on any frame or item) */
+export function hasEditMode(doc: Doc): boolean {
+  if (doc.projectContext) return true;
+  if (doc.frames.some((f) => f.editMode)) return true;
+  if (doc.groups.some((g) => g.items.some((it) => it.editMode))) return true;
+  return false;
+}
+
+/** the effective prompt in edit mode: edit prompt when projectContext is set, otherwise the normal one */
+export const effectivePromptAuto = (doc: Doc, widths: Record<string, number>, lang: Lang = getLang()): string =>
+  hasEditMode(doc) ? (doc.promptEdit !== undefined ? doc.promptEdit : buildEditPrompt(doc, widths, lang)) : effectivePrompt(doc, widths, lang);

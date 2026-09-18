@@ -1,0 +1,19 @@
+[package]
+name = "m3e-canvas"
+version = "0.1.0"
+description = "Sketch Material 3 Expressive screens and turn them into vibe-coding prompts."
+edition = "2021"
+
+[lib]
+name = "m3e_canvas_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"

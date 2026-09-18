@@ -22,6 +22,7 @@ import {
   isPhoneFrame,
   variantStyle,
   AlignKind,
+  ProjectContext,
 } from "@/lib/tokens";
 import { ButtonInspector } from "./ButtonInspector";
 import { PartInspector } from "./PartInspector";
@@ -355,6 +356,7 @@ export function Inspector({
   allFrames,
   onShowOn,
   onShowMenu,
+  projectContext,
 }: {
   /** the AI button beside the behavior field */
   ai: AiHooks;
@@ -390,6 +392,8 @@ export function Inspector({
   onShowOn?: (on: boolean) => void;
   /** asks the canvas to show a FAB's menu open while it is being set up */
   onShowMenu?: (open: boolean) => void;
+  /** project context for edit mode */
+  projectContext?: ProjectContext;
 }) {
   const lang = useLang();
 
@@ -485,6 +489,7 @@ export function Inspector({
       allFrames={allFrames ?? frames}
       measured={widths?.[item.id]}
       railStandalone={railStandalone}
+      projectContext={projectContext}
     />
   );
 }

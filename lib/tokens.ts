@@ -1663,6 +1663,10 @@ export type Item = {
   [fabOpen]?: boolean;
   /** runtime-only: the menu rises out of the part's top rather than dropping below it. */
   [menuUp]?: boolean;
+  /** path to the source component this item maps to (edit mode) */
+  linkedComponent?: string;
+  /** whether this part is new, modified, or removed (edit mode) */
+  editMode?: EditMode;
 };
 
 export type ToggleLook = { icon?: string | null; variant?: Variant; label?: string };
@@ -2083,6 +2087,8 @@ export const listStylePatch = (style: ListStyle): Pick<Item, "fill" | "iconFill"
   return style === "surface" ? { fill: undefined, iconFill: undefined } : { fill: s.fill, iconFill: s.iconFill };
 };
 
+export type EditMode = "new" | "modify" | "remove";
+
 export type Frame = {
   id: string;
   name: string;
@@ -2100,6 +2106,10 @@ export type Frame = {
   swipe?: Partial<Record<SwipeDir, string>>;
   /** where Tidy puts the body rows between the bars: from the top unless the author says otherwise */
   place?: Place;
+  /** path to the source file this screen maps to (edit mode) */
+  linkedFile?: string;
+  /** whether this screen is new, modified, or removed (edit mode) */
+  editMode?: EditMode;
 };
 
 /** how Tidy stacks the body of a screen: from the top, centered, against the bottom bar, or spread out */
@@ -2309,6 +2319,15 @@ export const isPlatform = (v: unknown): v is Platform => v === "android" || v ==
  *  soon as a desktop screen exists, Android otherwise. */
 export const defaultPlatformOf = (frames: Frame[], mode: FrameMode): Platform => (mode === "phone" && frames.some((f) => !isPhoneFrame(f)) ? "web" : DEFAULT_PLATFORM);
 
+export type ProjectContext = {
+  rootPath: string;
+  framework: string;
+  uiLib: string;
+  router: string;
+  typescript: boolean;
+  screens: { path: string; name: string }[];
+};
+
 export type Doc = {
   groups: Group[];
   frames: Frame[];
@@ -2328,6 +2347,8 @@ export type Doc = {
   promptOptions?: string[];
   /** shape, type, motion and the light / dark and contrast switches */
   theme?: Theme;
+  /** project context for edit mode: framework, root path, screens */
+  projectContext?: ProjectContext;
 };
 
 export const defaultTabs = (): NavTab[] => NAV_TABS[getLang()].map((t) => ({ ...t }));

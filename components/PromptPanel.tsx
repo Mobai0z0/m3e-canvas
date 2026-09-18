@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PromptMark, buildPrompt, promptMarks } from "@/lib/prompt";
+import { PromptMark, buildPrompt, buildEditPrompt, promptMarks, hasEditMode } from "@/lib/prompt";
 import { Doc, Palette, Platform, defaultPlatformOf } from "@/lib/tokens";
 import { Icon } from "./M3Node";
 import { Field, IconBtn, Segmented } from "./ui";
@@ -315,7 +315,8 @@ export function PromptPanel({
   onCover?: (up: boolean) => void;
 }) {
   const lang = useLang();
-  const generated = useMemo(() => buildPrompt(doc, widths, undefined, lang), [doc, widths, lang]);
+  const editMode = hasEditMode(doc);
+  const generated = useMemo(() => editMode ? buildEditPrompt(doc, widths, lang) : buildPrompt(doc, widths, undefined, lang), [doc, widths, lang, editMode]);
   const edited = doc.promptEdit !== undefined;
   const text = edited ? doc.promptEdit! : generated;
   const marks = useMemo(() => promptMarks(text, doc.frame === "phone" ? doc.frames : [], lang), [text, doc.frames, doc.frame, lang]);

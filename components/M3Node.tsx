@@ -1258,7 +1258,8 @@ function Body({ item, p, tabScroll, menuShown }: { item: Item; p: Palette; tabSc
     }
 
     case "slider": {
-      const v = Math.min(100, Math.max(0, item.value ?? 40)) / 100;
+      const raw = Number(item.value ?? 40);
+      const v = Math.min(100, Math.max(0, Number.isFinite(raw) ? raw : 40)) / 100;
       const w = item.size ?? 280;
       const handleX = 2 + (w - 4) * v;
       return (
@@ -1560,7 +1561,7 @@ function Body({ item, p, tabScroll, menuShown }: { item: Item; p: Palette; tabSc
           trackColor={p.secondaryContainer}
           wavy={item.wavy}
           trackThickness={progressThickness(item)}
-          value={item.value === undefined ? undefined : item.value / 100}
+          value={Number.isFinite(Number(item.value)) ? Number(item.value) / 100 : undefined}
         />
       );
 
@@ -1573,7 +1574,7 @@ function Body({ item, p, tabScroll, menuShown }: { item: Item; p: Palette; tabSc
             trackColor={p.secondaryContainer}
             wavy={item.wavy}
             trackThickness={progressThickness(item)}
-            value={item.value === undefined ? undefined : item.value / 100}
+            value={Number.isFinite(Number(item.value)) ? Number(item.value) / 100 : undefined}
           />
         </div>
       );

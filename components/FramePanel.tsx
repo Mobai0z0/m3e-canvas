@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import {
   ColorToken,
+  EditMode,
   Frame,
   FramePreset,
   Palette,
   Place,
+  ProjectContext,
   isPhoneFrame,
   onToken,
 } from "@/lib/tokens";
@@ -163,6 +165,7 @@ export function FrameInspector({
   onPlace,
   ai,
   onSize,
+  projectContext,
 }: {
   frame: Frame;
   palette: Palette;
@@ -180,6 +183,8 @@ export function FrameInspector({
   onPlace: (place: Place) => void;
   ai: AiHooks;
   onSize: (preset: FramePreset) => void;
+  /** project context for edit mode (optional, only when a project is imported) */
+  projectContext?: ProjectContext;
 }) {
   const lang = useLang();
   const [copied, setCopied] = useState(false);
@@ -281,6 +286,46 @@ export function FrameInspector({
             onPlace={onPlace}
           />
         </Section>
+        {projectContext && (
+          <Section id="frame-link" icon="link" title={t("project", lang)} p={p}>
+            {projectContext.screens.length > 0 ? (
+              <Field
+                value={frame.linkedFile ?? ""}
+                onChange={(v) => onChange({ linkedFile: v || undefined })}
+                placeholder={t("screenName", lang)}
+                p={p}
+              />
+            ) : null}
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              {(["new", "modify", "remove"] as EditMode[]).map((m) => {
+                const active = frame.editMode === m;
+                const activeBg = m === "new" ? p.primaryContainer : m === "modify" ? p.tertiaryContainer : p.errorContainer;
+                const activeFg = m === "new" ? p.onPrimaryContainer : m === "modify" ? p.onTertiaryContainer : p.onErrorContainer;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => onChange({ editMode: active ? undefined : m })}
+                    style={{
+                      flex: 1,
+                      padding: "6px 8px",
+                      borderRadius: 8,
+                      border: `1px solid ${active ? "transparent" : p.outlineVariant}`,
+                      cursor: "pointer",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      background: active ? activeBg : "transparent",
+                      color: active ? activeFg : p.onSurfaceVariant,
+                    }}
+                  >
+                    {m === "new" ? (lang === "zh" ? "新增" : lang === "ja" ? "新規" : lang === "ko" ? "추가" : "New")
+                      : m === "modify" ? (lang === "zh" ? "修改" : lang === "ja" ? "変更" : lang === "ko" ? "수정" : "Modify")
+                      : (lang === "zh" ? "删除" : lang === "ja" ? "削除" : lang === "ko" ? "삭제" : "Remove")}
+                  </button>
+                );
+              })}
+            </div>
+          </Section>
+        )}
       </div>
       <div
         role="tabpanel"

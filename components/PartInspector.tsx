@@ -45,6 +45,8 @@ import {
   sizeOf,
   timeLayoutOf,
   topBarHeightOf,
+  ProjectContext,
+  EditMode,
 } from "@/lib/tokens";
 import { Field, ImageRow, NamedSizes, PanelShell, RUN_CELL, Section, Segmented, Slider, Toggle } from "./ui";
 import { CardStage } from "./CardStage";
@@ -377,6 +379,7 @@ export function PartInspector({
   allFrames,
   measured,
   railStandalone = false,
+  projectContext,
 }: {
   ai: AiHooks;
   item: Item;
@@ -394,6 +397,8 @@ export function PartInspector({
   measured?: number;
   /** the rail owns its group, so it may overlay the screen when expanded */
   railStandalone?: boolean;
+  /** project context for edit mode */
+  projectContext?: ProjectContext;
 }) {
   const lang = useLang();
   const [tab, setTab] = useState<Tab>("design");
@@ -804,6 +809,38 @@ export function PartInspector({
             <NoTriggerNote p={p} />
           )}
           <NoteSection item={item} ai={ai} onChange={onChange} p={p} />
+          {projectContext && (
+            <Section id="part-edit-mode" icon="edit_note" title={t("project", lang)} p={p}>
+              <div style={{ display: "flex", gap: 6 }}>
+                {(["new", "modify", "remove"] as EditMode[]).map((m) => {
+                  const active = item.editMode === m;
+                  const activeBg = m === "new" ? p.primaryContainer : m === "modify" ? p.tertiaryContainer : p.errorContainer;
+                  const activeFg = m === "new" ? p.onPrimaryContainer : m === "modify" ? p.onTertiaryContainer : p.onErrorContainer;
+                  return (
+                    <button
+                      key={m}
+                      onClick={() => onChange({ editMode: active ? undefined : m } as Partial<Item>)}
+                      style={{
+                        flex: 1,
+                        padding: "6px 8px",
+                        borderRadius: 8,
+                        border: `1px solid ${active ? "transparent" : p.outlineVariant}`,
+                        cursor: "pointer",
+                        fontSize: 12,
+                        fontWeight: 500,
+                        background: active ? activeBg : "transparent",
+                        color: active ? activeFg : p.onSurfaceVariant,
+                      }}
+                    >
+                      {m === "new" ? (lang === "zh" ? "新增" : lang === "ja" ? "新規" : lang === "ko" ? "추가" : "New")
+                        : m === "modify" ? (lang === "zh" ? "修改" : lang === "ja" ? "変更" : lang === "ko" ? "수정" : "Modify")
+                        : (lang === "zh" ? "删除" : lang === "ja" ? "削除" : lang === "ko" ? "삭제" : "Remove")}
+                    </button>
+                  );
+                })}
+              </div>
+            </Section>
+          )}
         </div>
       )}
     </PanelShell>

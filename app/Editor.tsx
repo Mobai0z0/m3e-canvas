@@ -106,6 +106,7 @@ import {
   railExpansionSide,
   CONTENT_W,
   contentWidth,
+  ProjectContext,
 } from "@/lib/tokens";
 import { Icon, M3Node, M3Static, MeasuredContent } from "@/components/M3Node";
 import { CORNER_GAIN, CORNERS, HandleSide, SizeHandles } from "@/components/SizeHandles";
@@ -129,6 +130,7 @@ import { LoadingIndicator } from "@/components/Loading";
 import { draftDesign } from "@/lib/ai";
 import { ShareDialog } from "@/components/ShareMenu";
 import { ColorPanel } from "@/components/ColorPanel";
+import { ProjectPanel } from "@/components/ProjectPanel";
 import { MotionPanel, ShapePanel, TypePanel } from "@/components/ThemePanel";
 import { ThemeContext, ensureFontLoaded, ensureLangFontLoaded } from "@/lib/theme";
 import { BottomSheet, MobileActionBar, MobileInspector, MobileLang, MobileSettings } from "@/components/Mobile";
@@ -404,9 +406,9 @@ function ThinkingRing({ p, frame }: { p: Palette; frame: Frame }) {
   );
 }
 
-type LeftTab = "parts" | "layers" | "color" | "shape" | "type" | "motion" | "ai";
+type LeftTab = "parts" | "layers" | "color" | "shape" | "type" | "motion" | "ai" | "project";
 /** the left rail: parts and layers, then the four theme axes of the whole design */
-const LEFT_TABS: { key: LeftTab; icon: string; title: "parts" | "layers" | "colors" | "shape" | "typography" | "motion" | "ai" }[] = [
+const LEFT_TABS: { key: LeftTab; icon: string; title: "parts" | "layers" | "colors" | "shape" | "typography" | "motion" | "ai" | "project" }[] = [
   { key: "parts", icon: "add_box", title: "parts" },
   { key: "layers", icon: "layers", title: "layers" },
   { key: "color", icon: "palette", title: "colors" },
@@ -414,6 +416,7 @@ const LEFT_TABS: { key: LeftTab; icon: string; title: "parts" | "layers" | "colo
   { key: "type", icon: "text_fields", title: "typography" },
   { key: "motion", icon: "animation", title: "motion" },
   { key: "ai", icon: "auto_awesome", title: "ai" },
+  { key: "project", icon: "deployed_code", title: "project" },
 ];
 
 export default function Editor({ initialLang, onReady }: { initialLang: Lang; onReady?: () => void }) {
@@ -466,6 +469,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   const [promptCoverUp, setPromptCoverUp] = useState(false);
   /** the author's explicit target; null follows the screens (web once a desktop screen exists) */
   const [platform, setPlatform] = useState<Platform | null>(null);
+  /** project context for edit mode (imported local project) */
+  const [projectContext, setProjectContext] = useState<ProjectContext | undefined>(undefined);
   /** a project file waiting for the author to confirm replacing the canvas */
   const [pendingImport, setPendingImport] = useState<Doc | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
@@ -4055,6 +4060,72 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                   <MotionPanel p={p} theme={theme} onChange={patchTheme} />
                 ) : leftTab === "ai" ? (
                   <AiPanel p={p} settings={aiSettings} onSettings={updateAiSettings} />
+                ) : leftTab === "project" ? (
+                  <ProjectPanel
+                    lang={lang}
+                    palette={p}
+                    onImport={(result) => {
+                      setProjectContext({
+                        rootPath: result.rootPath,
+                        framework: result.projectInfo.framework,
+                        uiLib: result.projectInfo.uiLib,
+                        router: result.projectInfo.router,
+                        typescript: result.projectInfo.typescript,
+                        screens: result.screens.map((s) => ({ path: s.path, name: s.name })),
+                      });
+                      // Load imported screens onto the canvas
+                      if (result.screens.length > 0) {
+                        const newFrames: Frame[] = [];
+                        const newGroups: Group[] = [];
+                        // each phone frame holds roughly one screenful of parts; a screen
+                        // with more groups continues on extra frames named "Name · 2"
+                        const MAX_H = PHONE_H - 28;
+                        for (const screen of result.screens) {
+                          const pages: Group[][] = [];
+                          let cur: Group[] = [];
+                          let used = 0;
+                          for (const g0 of screen.doc.groups ?? []) {
+                            const g: Group = { ...g0, items: g0.items.map((it) => ({ ...it })) };
+                            const b = groupBounds(g, widths);
+                            const h = Math.max(1, b.b - b.t);
+                            if (cur.length > 0 && used + h > MAX_H) {
+                              pages.push(cur);
+                              cur = [];
+                              used = 0;
+                            }
+                            cur.push(g);
+                            used += h + 12;
+                          }
+                          if (cur.length > 0) pages.push(cur);
+                          pages.forEach((page, pi) => {
+                            const frame: Frame = {
+                              id: uid(),
+                              name: pi === 0 ? screen.name : `${screen.name} · ${pi + 1}`,
+                              x: newFrames.length * (PHONE_W + 40),
+                              y: 0,
+                              linkedFile: pi === 0 ? screen.path : undefined,
+                            };
+                            newFrames.push(frame);
+                            let y = 14;
+                            for (const g of page) {
+                              const b = groupBounds(g, widths);
+                              // shift the group so its top-left corner lands inside this frame
+                              newGroups.push({ ...g, x: g.x + (frame.x + 12 - b.l), y: g.y + (y - b.t) });
+                              y += Math.max(1, b.b - b.t) + 12;
+                            }
+                          });
+                        }
+                        // Replace canvas with imported screens
+                        snapshot(true);
+                        setFrames(newFrames);
+                        setGroups(migrateGroups(newGroups, newFrames));
+                        if (!mobileRef.current) {
+                          setFrame("phone");
+                          frameRef.current = "phone";
+                        }
+                      }
+                    }}
+                  />
                 ) : (
                   <LayersPanel
                     p={p}
@@ -4142,11 +4213,23 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
               }}
             >
               {frame === "phone" &&
-                frames.map((f) => {
+                (() => {
+                  /* world-space viewport (with margin): frames outside it keep their
+                   * shell but skip rendering every part inside — hundreds of imported
+                   * screens stay smooth while panning and zooming */
+                  const margin = 480;
+                  const winW = typeof window !== "undefined" ? window.innerWidth : 1440;
+                  const winH = typeof window !== "undefined" ? window.innerHeight : 900;
+                  const vx0 = (-view.x - margin) / view.z;
+                  const vx1 = (winW - view.x + margin) / view.z;
+                  const vy0 = (-view.y - margin) / view.z;
+                  const vy1 = (winH - view.y + margin) / view.z;
+                  return frames.map((f) => {
                   const on = f.id === selectedFrameId;
                   const bg = p[f.bg ?? "surface"];
                   const { w, h } = frameSizeOf(f);
                   const radius = frameRadius(f);
+                  const onScreen = f.x + w >= vx0 && f.x <= vx1 && f.y + h >= vy0 && f.y <= vy1;
                   return (
                     <div
                       key={f.id}
@@ -4217,10 +4300,12 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                             transition: SIZE_TRANSITION,
                           }}
                         >
-                          {groups
-                            .filter((g) => frameOf.get(g.id) === f.id)
-                            .map((g) => renderGroup(g, f.x, f.y))}
-                          {groups.some((g) => frameOf.get(g.id) === f.id && modalRailOf(g)) && (
+                          {onScreen &&
+                            groups
+                              .filter((g) => frameOf.get(g.id) === f.id)
+                              .map((g) => renderGroup(g, f.x, f.y))}
+                          {onScreen &&
+                            groups.some((g) => frameOf.get(g.id) === f.id && modalRailOf(g)) && (
                             <div aria-hidden style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.32)", pointerEvents: "none", zIndex: 1 }} />
                           )}
                           {draftBusy && (
@@ -4232,7 +4317,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                       </div>
                     </div>
                   );
-                })}
+                });
+                })()}
 
               {groups
                 .filter((g) => !frameOf.has(g.id))
@@ -4690,6 +4776,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                   onTidy={() => tidy(selectedFrame)}
                   onPlace={(pl) => setPlace(selectedFrame, pl)}
                   ai={{ ready: aiReady, reason: aiReason, busy: aiBusy && aiFrameId === selectedFrame.id, onRun: () => runAi("describe", selectedFrame), onCancel: cancelAi }}
+                  projectContext={projectContext}
                 />
               ) : rightTab === "edit" ? (
                 <Inspector
@@ -4723,6 +4810,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                   grouped={!!selectedGroup}
                   onGroup={groupSelected}
                   onUngroup={ungroupSelected}
+                  projectContext={projectContext}
                 />
               ) : (
                 <PromptPanel

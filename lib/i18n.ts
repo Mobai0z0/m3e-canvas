@@ -47,7 +47,7 @@ export function translateDefaultText(value: string, kind: string, field: "label"
   return value;
 }
 
-type Str = { ja: string; en: string; zh: string };
+type Str = { ja: string; en: string; zh: string; ko?: string };
 
 export function translateDefaultFrameName(name: string, lang: Lang): string {
   for (const { key } of LANGS) {
