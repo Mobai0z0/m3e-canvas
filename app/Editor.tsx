@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion, useSpring } from "motion/react";
 import { toPng } from "html-to-image";
 import { buildPrompt, effectivePrompt } from "@/lib/prompt";
@@ -53,7 +54,6 @@ import {
   Platform,
   Frame,
   Place,
-  AlignKind,
   FramePreset,
   FRAME_GAP,
   FRAME_LABEL_H,
@@ -63,6 +63,7 @@ import {
   frameRadius,
   frameRect,
   frameSizeOf,
+  frameLengthOf,
   carryItemSize,
   matchRunSize,
   runSizePatch,
@@ -124,7 +125,7 @@ import { LangMenu } from "@/components/Menus";
 import { AiActionKey, AiPanel, aiErrorText } from "@/components/AiPanel";
 import { TidyState, PANEL_FADE_H } from "@/components/ui";
 import { AiSettings, DEFAULT_AI, hasKey, isSecureUrl, loadAiSettings, proposeBehavior, proposeDescription, pushHistory, saveAiSettings } from "@/lib/ai";
-import { barSlotOf, bodyRect, carryFrame, pullInto, tidyFrame } from "@/lib/tidy";
+import { barSlotOf, bodyRect, carryFrame, holdsEdgeBar, maxFrameLength, minFrameLength, pullInto, stretchFrame, tidyFrame } from "@/lib/tidy";
 import { constrainModalRails, modalRailOf, updateRail } from "@/lib/rail";
 import { isProject, readProject, saveProject } from "@/lib/project";
 import { hasShareHash, readShareHash } from "@/lib/share";
@@ -318,6 +319,32 @@ function migrateGroups(groups: Group[], frames: Frame[]): Group[] {
   });
 }
 
+/** A copy of a unit under fresh ids, moved by (dx, dy). A copied modal rail starts collapsed
+ *  and standard: a screen shows one modal rail, and the copy sits inward of the edge the
+ *  original remembered. */
+function rekeyed(g: Group, dx: number, dy: number): Group {
+  const idMap = new Map(g.items.map((it) => [it.id, uid()]));
+  const pos: Record<string, { x: number; y: number }> | undefined = g.pos ? {} : undefined;
+  if (pos) for (const it of g.items) pos[idMap.get(it.id)!] = g.pos?.[it.id] ?? { x: 0, y: 0 };
+  const items = g.items.map((it) => {
+    const copy: Item = { ...structuredClone(it), id: idMap.get(it.id)! };
+    if (copy.kind === "navRail" && copy.railModal) {
+      copy.railModal = false;
+      copy.railExpanded = false;
+      delete copy[railExpansionSide];
+    }
+    return copy;
+  });
+  return { ...structuredClone(g), id: uid(), x: g.x + dx, y: g.y + dy, pos, items };
+}
+
+/** the ids of the copies, with the copy of the part that was primary last, so it stays the one the panel shows */
+function copiedIds(copies: Group[], primaryAt: number): string[] {
+  const ids = copies.flatMap((c) => c.items.map((it) => it.id));
+  if (primaryAt < 0 || primaryAt >= ids.length) return ids;
+  return [...ids.slice(0, primaryAt), ...ids.slice(primaryAt + 1), ids[primaryAt]];
+}
+
 /** Seed ids are deterministic so server and client render the same markup. */
 /* shown when an edit is refused because the group is locked */
 const lockedGroupMsg = () => t("lockedGroup", getLang());
@@ -382,9 +409,8 @@ const mobileSeed = (lang: Lang = getLang()): Group[] => {
 /** While the model works on a screen, the scheme's colors drift through its bezel. */
 function ThinkingRing({ p, frame }: { p: Palette; frame: Frame }) {
   const still = useReducedMotion();
-  const { w: frameW, h: frameH } = frameSizeOf(frame);
-  const w = frameW + BEZEL * 2;
-  const h = frameH + BEZEL * 2;
+  const w = frameSizeOf(frame).w + BEZEL * 2;
+  const h = frameLengthOf(frame) + BEZEL * 2;
   const d = Math.ceil(Math.hypot(w, h)) + 80;
   const stops = [p.primary, p.tertiaryContainer, p.inversePrimary, p.secondaryContainer, p.primaryContainer, p.primary];
   return (
@@ -570,6 +596,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   modeRef.current = mode;
   const spaceRef = useRef(spaceHeld);
   spaceRef.current = spaceHeld;
+  /** focus last moved with Tab, not with a pointer */
+  const tabbedRef = useRef(false);
   const frameRef = useRef(frame);
   frameRef.current = frame;
   const mobileRef = useRef(isMobile);
@@ -597,6 +625,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   const lastPatchRef = useRef<{ key: string; at: number }>({ key: "", at: 0 });
 
   const snapshot = useCallback((withMeta = false) => {
+    lastPatchRef.current = { key: "", at: 0 };
     setQuickUndo(false);
     pastRef.current.push(current(withMeta));
     if (pastRef.current.length > HISTORY_MAX) pastRef.current.shift();
@@ -616,6 +645,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   );
 
   const restore = (snap: Snapshot) => {
+    lastPatchRef.current = { key: "", at: 0 };
     for (const g of snap.groups) instantRef.current.add(g.id);
     if (snap.meta) {
       applyDoc({ ...snap.meta, groups: snap.groups, frames: snap.frames }, true);
@@ -1192,7 +1222,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
       }
       if (frameRef.current === "phone") {
         for (const f of framesRef.current) {
-          const { w, h } = frameSizeOf(f);
+          const { w } = frameSizeOf(f);
+          const h = frameLengthOf(f);
           xs.push(
             f.x,
             f.x + FRAME_MARGIN,
@@ -1352,6 +1383,38 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     };
     dragRef.current = d;
     setDrag({ ...d });
+  };
+
+  /** The group a new part becomes when it lands with its top-left at rawX/rawY, on the screen
+   *  under its centre if there is one. A bar spans that screen beside its rail; any other part
+   *  keeps its phone-sized default (a list or a field as wide as a desktop is rarely what the
+   *  author means), but no taller than the screen. Off any guide the part settles on the 4dp
+   *  grid of the screen it lands on; `held` names the axes that keep their whole pixel instead
+   *  (a guide's hold, or a Ctrl drop). A part that grew to the screen's width is kept inside it,
+   *  then settles back on the grid. */
+  const landNewPart = (item: Item, rawX: number, rawY: number, held: (axis: "x" | "y") => boolean): Group => {
+    const sz = sizeOf(item, widthsRef.current);
+    const targetFrame = framesRef.current.find((f) => {
+      const r = frameRect(f);
+      const cx = rawX + sz.w / 2;
+      const cy = rawY + sz.h / 2;
+      return cx >= r.l && cx <= r.r && cy >= r.t && cy <= r.b;
+    });
+    const slot = targetFrame ? barSlotOf(groupsRef.current, targetFrame, framesRef.current, widthsRef.current) : null;
+    const isBar = FULL_WIDTH.includes(item.kind);
+    const placedItem = targetFrame && slot ? (isBar ? carryItemSize(item, { w: PHONE_W, h: PHONE_H }, { w: slot.w, h: frameSizeOf(targetFrame).h }) : fitHeight(item, frameSizeOf(targetFrame).h)) : item;
+    const origin = targetFrame ?? { x: 0, y: 0 };
+    const settle = (axis: "x" | "y", pos: number) => (held(axis) ? Math.round(pos) : onGrid(pos, origin[axis]));
+    const landed: Group = {
+      id: uid(),
+      x: isBar && slot ? Math.round(slot.x) : settle("x", rawX),
+      y: settle("y", rawY),
+      axis: connectSpecOf(item)?.axis ?? "x",
+      items: [placedItem],
+    };
+    const pulled = targetFrame ? pullInto(landed, targetFrame, widthsRef.current) : landed;
+    if (pulled === landed) return pulled;
+    return { ...pulled, x: held("x") ? pulled.x : onGrid(pulled.x, origin.x), y: held("y") ? pulled.y : onGrid(pulled.y, origin.y) };
   };
 
   const onPartPointerDown = (e: React.PointerEvent, kind: Kind) => {
@@ -1749,41 +1812,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
       const rawX = loose ? d.px - d.offX : d.guide?.x ?? d.px - d.offX;
       const rawY = loose ? d.py - d.offY : d.guide?.y ?? d.py - d.offY;
       if (d.fromPalette) snapshot();
-      /* the screen the part was let go over, whatever size that screen is */
-      const targetFrame = framesRef.current.find((f) => {
-        const r = frameRect(f);
-        const cx = rawX + sz.w / 2;
-        const cy = rawY + sz.h / 2;
-        return cx >= r.l && cx <= r.r && cy >= r.t && cy <= r.b;
-      });
-      /* a bar spans the screen it lands on, beside its rail; any other part keeps its phone-sized
-       * default (a list or a field as wide as a desktop is rarely what the author means), but no
-       * taller than the screen */
-      const slot = targetFrame ? barSlotOf(groupsRef.current, targetFrame, framesRef.current, widthsRef.current) : null;
-      const isBar = FULL_WIDTH.includes(item.kind);
-      const placedItem = targetFrame && slot ? (isBar ? carryItemSize(item, { w: PHONE_W, h: PHONE_H }, { w: slot.w, h: frameSizeOf(targetFrame).h }) : fitHeight(item, frameSizeOf(targetFrame).h)) : item;
-      /* off any guide, the part settles on the 4dp grid of the screen it lands on */
-      const origin = targetFrame ?? { x: 0, y: 0 };
-      /* Ctrl keeps the pixel the cursor chose; a guide holds its whole-pixel
-         position; otherwise the axis settles on the 4dp grid as before.
-         A bar dropped on a screen keeps its own spanning rule. */
-      const settle = (onGuide: boolean, pos: number, grid: number) =>
-        loose || onGuide ? Math.round(pos) : onGrid(pos, grid);
-      const dropped: Group = {
-        id: uid(),
-        x: isBar && slot ? Math.round(slot.x) : settle(d.guide?.gx !== undefined, rawX, origin.x),
-        y: settle(d.guide?.gy !== undefined, rawY, origin.y),
-        axis: connectSpecOf(item)?.axis ?? "x",
-        items: [placedItem],
-      };
-      /* a part that grew to the screen's width is kept inside it, then settles back on the grid */
-      const pulled = targetFrame ? pullInto(dropped, targetFrame, widthsRef.current) : dropped;
-      /* a Ctrl drop keeps whatever pullInto chose, whole pixels included;
-         otherwise a part pulled back in settles on the grid again */
-      const ng =
-        pulled === dropped || loose
-          ? pulled
-          : { ...pulled, x: d.guide?.gx !== undefined ? pulled.x : onGrid(pulled.x, origin.x), y: d.guide?.gy !== undefined ? pulled.y : onGrid(pulled.y, origin.y) };
+      /* Ctrl keeps the pixel the cursor chose and a guide holds its whole-pixel position */
+      const ng = landNewPart(item, rawX, rawY, (axis) => loose || (axis === "x" ? d.guide?.gx : d.guide?.gy) !== undefined);
       setGroups((prev) =>
         prev.some((g) => g.items.some((it) => it.id === item.id))
           ? prev
@@ -2097,20 +2127,23 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     if (frameRef.current !== "phone") return none;
     const f = frameOfGroup(g, framesRef.current, widthsRef.current);
     if (!f) return none;
-    const { w: frameW, h: frameH } = frameSizeOf(f);
+    const { w: frameW, h: deviceH } = frameSizeOf(f);
+    const frameH = frameLengthOf(f);
     const a = sizeOf(before, widthsRef.current);
     const b = sizeOf(after, widthsRef.current);
-    const shift = (pos: number, len: number, next: number, f0: number, fLen: number) => {
+    const shift = (pos: number, len: number, next: number, f0: number, fLen: number, foot = true) => {
       const d = next - len;
       if (d === 0) return 0;
       const near = (v: number, target: number) => Math.abs(v - target) <= 1;
       if (near(pos + len / 2, f0 + fLen / 2)) return -Math.round(d / 2);
-      if (near(pos + len, f0 + fLen - FRAME_MARGIN) || near(pos + len, f0 + fLen)) return -d;
+      if (foot && (near(pos + len, f0 + fLen - FRAME_MARGIN) || near(pos + len, f0 + fLen))) return -d;
       return 0;
     };
     return {
       dx: shift(g.x, a.w, b.w, f.x, frameW),
-      dy: shift(g.y, a.h, b.h, f.y, frameH),
+      /* on a screen that runs further, a part keeps to its foot, or to the middle of the device;
+       * the foot of the device is no edge there, since the body runs on past it */
+      dy: shift(g.y, a.h, b.h, f.y, frameH) || (frameH > deviceH ? shift(g.y, a.h, b.h, f.y, deviceH, false) : 0),
     };
   };
 
@@ -2162,6 +2195,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
       return;
     }
     snapshot();
+    /* some of the selection sits in a locked group: the rest goes, and the author is told why that part stayed */
+    if (groupsRef.current.some((g) => g.locked && g.items.some((it) => ids.has(it.id)))) showToast(t("lockedKept", getLang()));
     setGroups((prev) =>
       prev
         .map((g) => {
@@ -2192,6 +2227,24 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     return held.length > 0 && held.every((g) => !!g.locked);
   }, [groups, selectedIds]);
 
+  /** the selection can be placed in a screen: something in it is not a bar, and all of that
+   *  stands on one screen -- a selection of bars alone, or one spread over several screens,
+   *  has no one body to go to */
+  const selectionPlaceable = useMemo(() => {
+    const ids = new Set(selectedIds);
+    const units = groups.filter((g) => g.items.some((it) => ids.has(it.id)) && !holdsEdgeBar(g));
+    if (!units.length) return false;
+    const f = frameOfGroup(units[0], frames, widths);
+    return !!f && units.every((g) => frameOfGroup(g, frames, widths)?.id === f.id);
+  }, [groups, frames, widths, selectedIds]);
+
+  /** the selection covers every group it touches, so locking it locks nothing that was not selected */
+  const selectionWhole = useMemo(() => {
+    const ids = new Set(selectedIds);
+    const held = groups.filter((g) => g.items.some((it) => ids.has(it.id)));
+    return held.length > 0 && held.every((g) => g.items.every((it) => ids.has(it.id)));
+  }, [groups, selectedIds]);
+
   /** locks every group holding a selected part, or unlocks them all when they already are */
   const toggleLockSelected = useCallback(() => {
     const ids = new Set(selectedIds);
@@ -2202,79 +2255,58 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     setGroups((gs) => gs.map((g) => (g.items.some((it) => ids.has(it.id)) ? { ...g, locked: next || undefined } : g)));
   }, [selectedIds, snapshot]);
 
-  const duplicateSelected = useCallback(() => {
-    if (!selected) return;
-    /* a selected hand-made group is copied whole, keeping its layout */
-    const fg = groupsRef.current.find((g) => g.free && g.items.some((it) => it.id === selected.id));
-    if (fg && fg.items.every((it) => selectedIds.includes(it.id))) {
-      const idMap = new Map(fg.items.map((it) => [it.id, uid()]));
-      const pos: Record<string, { x: number; y: number }> = {};
-      for (const it of fg.items) pos[idMap.get(it.id)!] = fg.pos?.[it.id] ?? { x: 0, y: 0 };
-      const copyG: Group = {
-        ...fg,
-        locked: undefined,
-        id: uid(),
-        x: fg.x + 24,
-        y: fg.y + 24,
-        pos,
-        items: fg.items.map((it) => ({ ...it, id: idMap.get(it.id)!, tabs: it.tabs?.map((t) => ({ ...t })) })),
-      };
-      snapshot();
-      setGroups((prev) => [...prev, copyG]);
-      setSelectedIds(copyG.items.map((it) => it.id));
-      return;
+  /** The selection as units that can be copied: a group whose parts are all selected goes
+   *  whole, keeping its layout; a part picked out of a larger group goes on its own, at its
+   *  place on the canvas. A copy starts unlocked; the lock belongs to the original. */
+  const selectionUnits = useCallback((): Group[] => {
+    const ids = new Set(selectedIds);
+    const rects = new Map(itemRects().map((r) => [r.id, r]));
+    const out: Group[] = [];
+    for (const g of groupsRef.current) {
+      const picked = g.items.filter((it) => ids.has(it.id));
+      if (!picked.length) continue;
+      if (picked.length === g.items.length) {
+        out.push({ ...structuredClone(g), locked: undefined });
+        continue;
+      }
+      for (const it of picked) {
+        const r = rects.get(it.id);
+        if (r) out.push({ id: g.id, x: r.l, y: r.t, axis: connectSpecOf(it)?.axis ?? "x", items: [structuredClone(it)] });
+      }
     }
-    const rect = itemRects().find((r) => r.id === selected.id);
-    if (!rect) return;
-    const copy: Item = {
-      ...selected,
-      id: uid(),
-      tabs: selected.tabs?.map((t) => ({ ...t })),
-    };
-    /* a copied modal rail starts collapsed and standard: a screen shows one modal rail, and
-       the copy sits inward of the edge the original remembered */
-    if (copy.kind === "navRail" && copy.railModal) {
-      copy.railModal = false;
-      copy.railExpanded = false;
-      delete copy[railExpansionSide];
-    }
-    snapshot();
-    setGroups((prev) => [
-      ...prev,
-      {
-        id: uid(),
-        x: rect.l + 24,
-        y: rect.t + 24,
-        axis: connectSpecOf(copy)?.axis ?? "x",
-        items: [copy],
-      },
-    ]);
-    setSelectedIds([copy.id]);
-  }, [selected, selectedIds, itemRects, snapshot]);
+    return out;
+  }, [selectedIds, itemRects]);
 
-  /* The in-app clipboard: Ctrl+C keeps a copy of the selection (a whole group when
-   * the selection covers one) with its offset inside its screen, so Ctrl+V can put it
-   * at the same spot on another screen, or a step aside on the same one. */
-  const clipboardRef = useRef<{ group: Group; dx: number; dy: number; frameId: string | null } | null>(null);
+  /** duplicates everything selected a step aside, and selects the copies */
+  const duplicateSelected = useCallback(() => {
+    const units = selectionUnits();
+    if (!units.length) return;
+    const copies = units.map((u) => rekeyed(u, 24, 24));
+    const primaryAt = units.flatMap((u) => u.items.map((it) => it.id)).indexOf(primaryId ?? "");
+    snapshot();
+    setGroups((prev) => [...prev, ...copies]);
+    setSelectedIds(copiedIds(copies, primaryAt));
+  }, [selectionUnits, primaryId, snapshot]);
+
+  /* The in-app clipboard: Ctrl+C keeps a copy of the selection (whole groups where the
+   * selection covers them) with its offset inside its screen, so Ctrl+V can put it at the
+   * same spot on another screen, or a step aside on the same one. The offset is that of the
+   * selection's top-left corner, so several units keep their places relative to each other. */
+  const clipboardRef = useRef<{ groups: Group[]; dx: number; dy: number; frameId: string | null; primaryAt: number } | null>(null);
 
   const copySelected = useCallback(() => {
     if (!selected) return;
-    const ids = new Set(selectedIds);
     const g = groupsRef.current.find((x) => x.items.some((it) => it.id === selected.id));
     if (!g) return;
-    let group: Group;
-    if (g.items.every((it) => ids.has(it.id))) {
-      /* a copy starts unlocked; the lock belongs to the original */
-      group = { ...structuredClone(g), locked: undefined };
-    } else {
-      const rect = itemRects().find((r) => r.id === selected.id);
-      if (!rect) return;
-      group = { id: g.id, x: rect.l, y: rect.t, axis: connectSpecOf(selected)?.axis ?? "x", items: [structuredClone(selected)] };
-    }
-    /* a group on no screen keeps its canvas position; one on a screen keeps its offset there */
+    const groups = selectionUnits();
+    if (!groups.length) return;
+    const x = Math.min(...groups.map((u) => u.x));
+    const y = Math.min(...groups.map((u) => u.y));
+    /* a selection on no screen keeps its canvas position; one on a screen keeps its offset there */
     const f = frameOfGroup(g, framesRef.current, widthsRef.current);
-    clipboardRef.current = { group, dx: f ? group.x - f.x : 0, dy: f ? group.y - f.y : 0, frameId: f?.id ?? null };
-  }, [selected, selectedIds, itemRects]);
+    const primaryAt = groups.flatMap((u) => u.items.map((it) => it.id)).indexOf(selected.id);
+    clipboardRef.current = { groups, dx: f ? x - f.x : x, dy: f ? y - f.y : y, frameId: f?.id ?? null, primaryAt };
+  }, [selected, selectionUnits]);
 
   const pasteClipboard = useCallback(() => {
     const clip = clipboardRef.current;
@@ -2287,29 +2319,24 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
       if (g) target = frameOfGroup(g, fs, widthsRef.current) ?? undefined;
     }
     if (!target) target = fs.find((f) => f.id === clip.frameId);
-    let x = target && clip.frameId ? target.x + clip.dx : clip.group.x;
-    let y = target && clip.frameId ? target.y + clip.dy : clip.group.y;
-    /* onto a spot already taken (the source, or an earlier paste) it steps aside like a duplicate */
-    while (groupsRef.current.some((g) => g.x === x && g.y === y)) {
-      x += 24;
-      y += 24;
+    const x0 = Math.min(...clip.groups.map((u) => u.x));
+    const y0 = Math.min(...clip.groups.map((u) => u.y));
+    /* with no screen to land on -- none was copied from, or it is gone -- it goes back where it was copied from */
+    let dx = target && clip.frameId ? target.x + clip.dx - x0 : 0;
+    let dy = target && clip.frameId ? target.y + clip.dy - y0 : 0;
+    /* onto a spot already taken (the source, or an earlier paste) it steps aside like a duplicate;
+       a part taken from the middle of a run is known by its own corner, not the run's */
+    const taken = new Set([...groupsRef.current.map((g) => `${g.x},${g.y}`), ...itemRects().map((r) => `${r.l},${r.t}`)]);
+    while (clip.groups.some((u) => taken.has(`${u.x + dx},${u.y + dy}`))) {
+      dx += 24;
+      dy += 24;
     }
-    const idMap = new Map(clip.group.items.map((it) => [it.id, uid()]));
-    const pos: Record<string, { x: number; y: number }> | undefined = clip.group.pos ? {} : undefined;
-    if (pos) for (const it of clip.group.items) pos[idMap.get(it.id)!] = clip.group.pos?.[it.id] ?? { x: 0, y: 0 };
-    const copy: Group = {
-      ...structuredClone(clip.group),
-      id: uid(),
-      x,
-      y,
-      pos,
-      items: clip.group.items.map((it) => ({ ...structuredClone(it), id: idMap.get(it.id)! })),
-    };
+    const copies = clip.groups.map((u) => rekeyed(u, dx, dy));
     snapshot();
-    setGroups((prev) => [...prev, copy]);
-    setSelectedIds(copy.items.map((it) => it.id));
+    setGroups((prev) => [...prev, ...copies]);
+    setSelectedIds(copiedIds(copies, clip.primaryAt));
     setSelectedFrameId(null);
-  }, [selected, selectedFrameId, snapshot]);
+  }, [selected, selectedFrameId, itemRects, snapshot]);
 
   /** the free group the whole selection belongs to, if it is exactly one */
   const selectedGroup = useMemo(() => {
@@ -2320,34 +2347,40 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     return selectedIds.every((id) => ids.has(id)) && selectedIds.length === g.items.length ? g : null;
   }, [groups, selectedIds]);
 
-  /** Pull the selected parts out of their runs into one free group that keeps
-   *  their positions. It takes the layer slot of the topmost run involved. */
-  /** Lines the selected parts up, or spaces them evenly. Whole groups move: a connected
-   *  run or a hand-made group is one unit, like in Tidy. Several parts line up with each
-   *  other's bounding box; a lone part lines up with the screen's body area, the box Tidy
-   *  fills between the bars. A unit that would land on another part steps away from the
-   *  edge it was aligned to until it is clear. */
-  /** Puts a lone part at one of nine spots in its screen's body, the box Tidy fills between
-   *  the bars. Parts already there are obstacles: the moved part slides along the vertical
-   *  axis, away from the edge it was sent to (down from the top, up from the bottom, the
-   *  nearer way from the middle), until it sits clear of them or the body runs out. */
+  /** Puts the selection at one of nine spots in its screen's body, the box Tidy fills between
+   *  the bars. Whole groups move, as one block: a connected run or a hand-made group is one
+   *  unit, like in Tidy, and several units keep their places relative to each other. A bar in
+   *  the selection is not part of the block: it keeps to its edge. Parts already there are
+   *  obstacles: the block slides along the vertical axis, away from the edge it was sent to
+   *  (down from the top, up from the bottom, the nearer way from the middle), until it sits
+   *  clear of them or the body runs out. */
   const placeSelected = useCallback(
     (col: "left" | "centerH" | "right", row: "top" | "centerV" | "bottom") => {
-      if (selectedIds.length !== 1) return;
+      const ids = new Set(selectedIds);
       const all = groupsRef.current;
-      const g = all.find((x) => !x.locked && x.items.some((it) => it.id === selectedIds[0]));
-      if (!g) return;
-      const f = frameOfGroup(g, framesRef.current, widthsRef.current);
-      if (!f) return;
+      /* a bar stays on the edge it belongs to, and the body it bounds is where the rest goes */
+      const units = all.filter((x) => x.items.some((it) => ids.has(it.id)) && !holdsEdgeBar(x));
+      if (!units.length) return;
+      /* a locked group stays where it is, and the rest does not move without it */
+      if (units.some((x) => x.locked)) {
+        showToast(lockedGroupMsg());
+        return;
+      }
+      const f = frameOfGroup(units[0], framesRef.current, widthsRef.current);
+      /* the block lines up inside one screen; parts spread over several have no one body to fill */
+      if (!f || units.some((x) => frameOfGroup(x, framesRef.current, widthsRef.current)?.id !== f.id)) return;
+      const unitIds = new Set(units.map((x) => x.id));
       const rects = new Map(all.map((x) => [x.id, groupBounds(x, widthsRef.current)]));
-      const r = rects.get(g.id)!;
+      const r = units
+        .map((x) => rects.get(x.id)!)
+        .reduce((a, o) => ({ l: Math.min(a.l, o.l), t: Math.min(a.t, o.t), r: Math.max(a.r, o.r), b: Math.max(a.b, o.b) }));
       const w = r.r - r.l;
       const h = r.b - r.t;
-      const bb = bodyRect(all, f, framesRef.current, widthsRef.current, new Set([g.id]));
+      const bb = bodyRect(all, f, framesRef.current, widthsRef.current, unitIds);
       const x = col === "left" ? bb.l : col === "right" ? bb.r - w : Math.round((bb.l + bb.r) / 2 - w / 2);
       const y0 = row === "top" ? bb.t : row === "bottom" ? bb.b - h : Math.round((bb.t + bb.b) / 2 - h / 2);
       const others = all
-        .filter((x) => x.id !== g.id && frameOfGroup(x, framesRef.current, widthsRef.current)?.id === f.id)
+        .filter((x) => !unitIds.has(x.id) && frameOfGroup(x, framesRef.current, widthsRef.current)?.id === f.id)
         .map((x) => rects.get(x.id)!)
         /* only parts in the same column can be in the way */
         .filter((o) => o.l < x + w && o.r > x);
@@ -2369,87 +2402,13 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
       const dy = y - r.t;
       if (!dx && !dy) return;
       snapshot();
-      setGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, x: x.x + dx, y: x.y + dy } : x)));
+      setGroups((gs) => gs.map((x) => (unitIds.has(x.id) ? { ...x, x: x.x + dx, y: x.y + dy } : x)));
     },
     [selectedIds, snapshot],
   );
 
-  const alignSelected = useCallback(
-    (kind: AlignKind) => {
-      const ids = new Set(selectedIds);
-      const all = groupsRef.current;
-      /* a locked group is left out of the alignment and stays an obstacle for the others */
-      const units = all.filter((g) => !g.locked && g.items.some((it) => ids.has(it.id)));
-      if (units.length === 0) return;
-      const unitIds = new Set(units.map((g) => g.id));
-      const distributing = kind === "distributeH" || kind === "distributeV";
-      const horizontal = kind === "left" || kind === "centerH" || kind === "right" || kind === "distributeH";
-      const rects = new Map(all.map((g) => [g.id, groupBounds(g, widthsRef.current)]));
-      let bb = units.map((g) => rects.get(g.id)!).reduce((a, r) => ({ l: Math.min(a.l, r.l), t: Math.min(a.t, r.t), r: Math.max(a.r, r.r), b: Math.max(a.b, r.b) }));
-      let screenId: string | null = null;
-      if (units.length === 1) {
-        const f = frameOfGroup(units[0], framesRef.current, widthsRef.current);
-        if (!f || distributing) return;
-        screenId = f.id;
-        bb = bodyRect(all, f, framesRef.current, widthsRef.current, new Set(units.map((g) => g.id)));
-      }
-      const shift = new Map<string, { dx: number; dy: number }>();
-      if (distributing) {
-        const sorted = [...units].sort((a, b) => (horizontal ? rects.get(a.id)!.l - rects.get(b.id)!.l : rects.get(a.id)!.t - rects.get(b.id)!.t));
-        const sizes = sorted.map((g) => (horizontal ? rects.get(g.id)!.r - rects.get(g.id)!.l : rects.get(g.id)!.b - rects.get(g.id)!.t));
-        const span = horizontal ? bb.r - bb.l : bb.b - bb.t;
-        const gap = (span - sizes.reduce((s, v) => s + v, 0)) / (sorted.length - 1);
-        let pos = horizontal ? bb.l : bb.t;
-        sorted.forEach((g, i) => {
-          const r = rects.get(g.id)!;
-          shift.set(g.id, horizontal ? { dx: Math.round(pos) - r.l, dy: 0 } : { dx: 0, dy: Math.round(pos) - r.t });
-          pos += sizes[i] + gap;
-        });
-      } else {
-        /* parts that are not moving, on the same screen, that a moved unit must not land on */
-        const others = all.filter((g) => !unitIds.has(g.id) && (!screenId || frameOfGroup(g, framesRef.current, widthsRef.current)?.id === screenId)).map((g) => rects.get(g.id)!);
-        const hits = (r: { l: number; t: number; r: number; b: number }) => others.filter((o) => o.l < r.r && o.r > r.l && o.t < r.b && o.b > r.t);
-        /* stepping away from the aligned edge: right of a left edge, up from a bottom edge; a centre tries both ways */
-        const dir = kind === "left" || kind === "top" ? 1 : kind === "right" || kind === "bottom" ? -1 : 0;
-        for (const g of units) {
-          const r = rects.get(g.id)!;
-          const w = r.r - r.l;
-          const h = r.b - r.t;
-          const ax = kind === "left" ? bb.l : kind === "centerH" ? Math.round((bb.l + bb.r) / 2 - w / 2) : kind === "right" ? bb.r - w : r.l;
-          const ay = kind === "top" ? bb.t : kind === "centerV" ? Math.round((bb.t + bb.b) / 2 - h / 2) : kind === "bottom" ? bb.b - h : r.t;
-          /* candidates stay inside the reference box; with no clear spot the plain alignment wins */
-          let x = ax;
-          let y = ay;
-          let clear = false;
-          for (let tries = 0, sign = dir || 1; tries < 12; tries++, sign = dir || -sign) {
-            const blocking = hits({ l: x, t: y, r: x + w, b: y + h });
-            if (!blocking.length) {
-              clear = true;
-              break;
-            }
-            const step = 8 + (horizontal ? Math.max(...blocking.map((o) => o.r - o.l)) : Math.max(...blocking.map((o) => o.b - o.t)));
-            if (horizontal) x = clamp(x + sign * step * (dir ? 1 : tries + 1), bb.l, Math.max(bb.l, bb.r - w));
-            else y = clamp(y + sign * step * (dir ? 1 : tries + 1), bb.t, Math.max(bb.t, bb.b - h));
-          }
-          if (!clear) {
-            x = ax;
-            y = ay;
-          }
-          shift.set(g.id, { dx: x - r.l, dy: y - r.t });
-        }
-      }
-      if (![...shift.values()].some((s) => s.dx || s.dy)) return;
-      snapshot();
-      setGroups((gs) =>
-        gs.map((g) => {
-          const s = shift.get(g.id);
-          return s && (s.dx || s.dy) ? { ...g, x: g.x + s.dx, y: g.y + s.dy } : g;
-        }),
-      );
-    },
-    [selectedIds, snapshot],
-  );
-
+  /** Pull the selected parts out of their runs into one free group that keeps
+   *  their positions. It takes the layer slot of the topmost run involved. */
   const groupSelected = useCallback(() => {
     const ids = new Set(selectedIds);
     if (ids.size < 2) return;
@@ -2703,6 +2662,10 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     () => frames.find((f) => f.id === selectedFrameId) ?? null,
     [frames, selectedFrameId],
   );
+  const selectedMinLength = useMemo(
+    () => (selectedFrame ? minFrameLength(groups, selectedFrame, frames, widths) : 0),
+    [groups, selectedFrame, frames, widths],
+  );
   /** the selected toggle button is drawn in its "on" look while the panel edits that look */
   const [showOnId, setShowOnId] = useState<string | null>(null);
   /** the FAB whose menu the panel is showing open: it is open while its trigger tab is */
@@ -2769,18 +2732,34 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   const ensureFrameRef = useRef(() => {});
   ensureFrameRef.current = ensureFrame;
 
-  /** phone UI: the plus button drops a new button where the view is looking,
-   *  kept inside the screen, and nudged down when that spot is already taken */
-  const addButton = () => {
+  /** A palette tile chosen without a pointer, and the phone's plus button, drop a part where
+   *  the view is looking, landing as a drop there would. Over a screen it is kept inside it and
+   *  nudged down when that spot is already taken; over empty canvas it stays at the centre of
+   *  the view, so the new part is always in sight */
+  const addPart = (kind: Kind) => {
+    /* a snapped drop still settling is committed and rendered first, so the undo step taken
+     * below sees it and the free-spot search counts it */
+    if (pendingRef.current) flushSync(flushPending);
     const r = canvasRect();
     const v = viewRef.current;
-    const item = makeItem("button");
+    const item = makeItem(kind);
     const sz = sizeOf(item, widthsRef.current);
-    const f = framesRef.current[0];
-    let x = ((r?.width ?? 0) / 2 - v.x) / v.z - sz.w / 2;
-    let y = ((r?.height ?? 0) / 2 - v.y) / v.z - sz.h / 2;
+    const cx = ((r?.width ?? 0) / 2 - v.x) / v.z;
+    const cy = ((r?.height ?? 0) / 2 - v.y) / v.z;
+    /* screens are hidden on a blank canvas; the phone shows one screen at a time, so its plus
+     * button always means that screen */
+    const f =
+      frameRef.current !== "phone"
+        ? undefined
+        : framesRef.current.find((fr) => {
+            const fr2 = frameRect(fr);
+            return cx >= fr2.l && cx <= fr2.r && cy >= fr2.t && cy <= fr2.b;
+          }) ?? (mobileRef.current ? framesRef.current[0] : undefined);
+    let x = cx - sz.w / 2;
+    let y = cy - sz.h / 2;
     if (f) {
-      const { w, h } = frameSizeOf(f);
+      const { w } = frameSizeOf(f);
+      const h = frameLengthOf(f);
       const lx = f.x + Math.min(FRAME_MARGIN, (w - sz.w) / 2);
       const ly = f.y + Math.min(FRAME_MARGIN, (h - sz.h) / 2);
       x = clamp(x, lx, Math.max(lx, f.x + w - FRAME_MARGIN - sz.w));
@@ -2791,18 +2770,11 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
       while (taken(y) && y + sz.h * 2 < f.y + h && tries++ < 12) y += sz.h + 12;
     }
     snapshot();
-    setGroups((gs) => [
-      ...gs,
-      {
-        id: uid(),
-        x: Math.round(x),
-        y: Math.round(y),
-        axis: "x",
-        items: [item],
-      },
-    ]);
+    const ng = landNewPart(item, x, y, () => false);
+    setGroups((gs) => [...gs, ng]);
     setSelectedIds([item.id]);
     setSelectedFrameId(null);
+    setRightTab("edit");
     setSheet(null);
   };
 
@@ -2849,7 +2821,9 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   const setFramePreset = (id: string, preset: FramePreset) => {
     const current = framesRef.current.find((f) => f.id === id);
     if (!current) return;
-    const next = { ...current, ...framePresetPatch(preset) };
+    const sized = { ...current, ...framePresetPatch(preset) };
+    /* a screen no longer than its new device does not scroll any more */
+    const next = sized.length !== undefined && sized.length <= frameSizeOf(sized).h ? { ...sized, length: undefined } : sized;
     const before = frameSizeOf(current);
     const after = frameSizeOf(next);
     if (before.w === after.w && before.h === after.h) return;
@@ -2865,6 +2839,87 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     window.setTimeout(() => setEasing(false), SETTLE_MS + 40);
     setFrames(laid.frames);
     setGroups(laid.groups);
+  };
+
+  /** the document a run of length changes started from, and what the last of them made of it */
+  const lengthRun = useRef<{ id: string; from: { frames: Frame[]; groups: Group[] }; to: { frames: Frame[]; groups: Group[] } } | null>(null);
+  /** makes a screen run longer than its device, or back: what stands at its foot goes with the foot.
+   *  A slider sends a stream of lengths; each is worked out from where the stream began, so a part
+   *  is never taken for one at the foot halfway through and dragged along from then on. */
+  /** One drag of a screen's length handle: the document it started from, and how it takes its one undo step */
+  type LengthDrag = { from: { frames: Frame[]; groups: Group[] }; snap: () => void };
+  const setFrameLength = (id: string, length: number, drag?: LengthDrag) => {
+    const run = lengthRun.current;
+    const from = drag
+      ? drag.from
+      : run && run.id === id && run.to.frames === framesRef.current && run.to.groups === groupsRef.current
+        ? run.from
+        : { frames: framesRef.current, groups: groupsRef.current };
+    const start = from.frames.find((f) => f.id === id);
+    const current = framesRef.current.find((f) => f.id === id);
+    if (!start || !current) return;
+    const to = Math.max(length, minFrameLength(from.groups, start, from.frames, widthsRef.current));
+    if (to === frameLengthOf(current)) return;
+    const laid = stretchFrame(from.groups, start, to, from.frames, widthsRef.current);
+    lengthRun.current = { id, from, to: laid };
+    if (drag) drag.snap();
+    else snapshotFor("frame:" + id + ":length");
+    tidyRef.current = null;
+    setFrames(laid.frames);
+    setGroups(laid.groups);
+  };
+
+  /** the screen whose length handle is being dragged: it follows the pointer without easing */
+  const [lengthDragId, setLengthDragId] = useState<string | null>(null);
+  /** the grip under the chosen screen: dragging it makes the screen run longer or shorter, as the
+   *  length slider does, in steps of 4dp. The whole drag is worked out from the document it began
+   *  with, and takes one undo step, and only once the length really changes. */
+  const onLengthHandleDown = (e: React.PointerEvent, f: Frame) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pointerId = e.pointerId;
+    const startY = e.clientY;
+    const start = frameLengthOf(f);
+    const deviceH = frameSizeOf(f).h;
+    const max = maxFrameLength(f);
+    let snapped = false;
+    const drag: LengthDrag = {
+      from: { frames: framesRef.current, groups: groupsRef.current },
+      snap: () => {
+        if (snapped) return;
+        snapshot();
+        snapped = true;
+      },
+    };
+    lengthRun.current = null;
+    setLengthDragId(f.id);
+    /* captured, the pointer's events reach the window through the handle wherever it is let go;
+     * should the handle go away mid-drag, they reach the window directly */
+    (e.currentTarget as HTMLElement).setPointerCapture(pointerId);
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      setFrameLength(f.id, clamp(Math.round((start + (ev.clientY - startY) / viewRef.current.z) / 4) * 4, deviceH, max), drag);
+    };
+    const end = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      lengthRun.current = null;
+      setLengthDragId(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+  /** the same handle from the keyboard: arrows move it by 4dp, with Shift by 40dp */
+  const onLengthHandleKey = (e: React.KeyboardEvent, f: Frame) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const step = (e.shiftKey ? 40 : 4) * (e.key === "ArrowDown" ? 1 : -1);
+    setFrameLength(f.id, clamp(frameLengthOf(f) + step, frameSizeOf(f).h, maxFrameLength(f)));
   };
 
   /** the tidy button's state for the screen in play; the layout pass runs only when the document changes */
@@ -3078,8 +3133,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
       await document.fonts?.ready;
       const el = document.querySelector<HTMLElement>(`[data-export="${f.id}"]`);
       if (!el) return;
-      const { w, h } = frameSizeOf(f);
-      const url = await toPng(el, { pixelRatio: 2, cacheBust: true, width: w, height: h });
+      const url = await toPng(el, { pixelRatio: 2, cacheBust: true, width: frameSizeOf(f).w, height: frameLengthOf(f) });
       const a = document.createElement("a");
       a.href = url;
       a.download = `${f.name || "screen"}.png`;
@@ -3092,7 +3146,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   /** the runs of one screen drawn with plain divs: the export layer */
   const renderExport = (f: Frame) => {
     const gs = groups.filter((g) => frameOfGroup(g, frames, widths)?.id === f.id);
-    const { w, h } = frameSizeOf(f);
+    const { w } = frameSizeOf(f);
+    const h = frameLengthOf(f);
     return (
       <div
         data-export={f.id}
@@ -3186,7 +3241,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
   const glideToFrame = (f: Frame) => {
     const r = canvasRect();
     if (!r) return;
-    const { w, h } = frameSizeOf(f);
+    const { w } = frameSizeOf(f);
+    const h = frameLengthOf(f);
     const boxW = w + BEZEL * 2;
     const boxH = h + BEZEL * 2 + FRAME_LABEL_H;
     const v = viewRef.current;
@@ -3255,6 +3311,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Tab") tabbedRef.current = true;
       if (editAccess !== "editable") return;
       const t = e.target as HTMLElement;
       const typing =
@@ -3302,6 +3359,9 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
         else groupSelected();
         return;
       }
+      /* Space presses a control reached with Tab instead of holding the hand tool; a button
+       * clicked with the mouse keeps focus too, and must not be pressed again */
+      if (e.key === " " && tabbedRef.current && t.closest?.("button, [role=button]")) return;
       if (e.key === " " && !e.repeat) {
         e.preventDefault();
         setSpaceHeld(true);
@@ -3343,11 +3403,16 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") setSpaceHeld(false);
     };
+    const onPointer = () => {
+      tabbedRef.current = false;
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("pointerdown", onPointer, true);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("pointerdown", onPointer, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -4059,6 +4124,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                       )
                     }
                     onPartPointerDown={onPartPointerDown}
+                    onPartActivate={addPart}
                   />
                 ) : leftTab === "color" ? (
                   <ColorPanel
@@ -4247,7 +4313,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                   return frames.map((f) => {
                   const on = f.id === selectedFrameId;
                   const bg = p[f.bg ?? "surface"];
-                  const { w, h } = frameSizeOf(f);
+                  const { w, h: fold } = frameSizeOf(f);
+                  const h = frameLengthOf(f);
                   const radius = frameRadius(f);
                   const onScreen = f.x + w >= vx0 && f.x <= vx1 && f.y + h >= vy0 && f.y <= vy1;
                   return (
@@ -4302,7 +4369,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                           animation: draftBusy ? "m3e-drift 3s ease-in-out infinite" : undefined,
                           boxShadow: on ? "0 18px 50px rgba(0,0,0,0.16)" : "0 18px 50px rgba(0,0,0,0.14)",
                           cursor: handMode ? "grab" : "move",
-                          transition: `background-color 160ms, box-shadow 120ms, ${SIZE_TRANSITION}`,
+                          transition: lengthDragId === f.id ? "background-color 160ms, box-shadow 120ms" : `background-color 160ms, box-shadow 120ms, ${SIZE_TRANSITION}`,
                         }}
                       >
                         <AnimatePresence>{aiFrameId === f.id && <ThinkingRing key="ring" p={p} frame={f} />}</AnimatePresence>
@@ -4317,7 +4384,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                             borderRadius: radius,
                             background: bg,
                             overflow: "hidden",
-                            transition: SIZE_TRANSITION,
+                            transition: lengthDragId === f.id ? undefined : SIZE_TRANSITION,
                           }}
                         >
                           {onScreen &&
@@ -4328,6 +4395,10 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                             groups.some((g) => frameOf.get(g.id) === f.id && modalRailOf(g)) && (
                             <div aria-hidden style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.32)", pointerEvents: "none", zIndex: 1 }} />
                           )}
+                          {/* where the device ends on a screen that runs further: below it, the body scrolls */}
+                          {h > fold && (
+                            <div aria-hidden style={{ position: "absolute", left: 0, right: 0, top: fold, borderTop: `2px dashed ${p.outline}`, opacity: 0.6, pointerEvents: "none", zIndex: 2 }} />
+                          )}
                           {draftBusy && (
                             <div style={{ position: "absolute", inset: 0, zIndex: 90, background: canvasBg, display: "grid", placeItems: "center" }}>
                               <LoadingIndicator size={96} color="url(#m3e-drafting)" />
@@ -4335,6 +4406,35 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                           )}
                         </div>
                       </div>
+                      {/* the chosen screen's length grip, a small nub on its bottom bezel: drag it down and the body runs on */}
+                      {on && !handMode && !draftBusy && (
+                        <div
+                          role="slider"
+                          tabIndex={0}
+                          aria-label={t("screenLength", lang)}
+                          aria-valuemin={selectedMinLength}
+                          aria-valuemax={maxFrameLength(f)}
+                          aria-valuenow={h}
+                          onPointerDown={(e) => onLengthHandleDown(e, f)}
+                          onKeyDown={(e) => onLengthHandleKey(e, f)}
+                          style={{
+                            position: "absolute",
+                            left: w / 2 - 32,
+                            top: h - 4,
+                            width: 64,
+                            height: BEZEL + 8,
+                            display: "grid",
+                            placeItems: "center",
+                            transform: `scale(${clamp(1 / view.z, 1, 2)})`,
+                            cursor: "ns-resize",
+                            touchAction: "none",
+                            zIndex: 1,
+                            transition: lengthDragId === f.id ? undefined : `top ${SETTLE_MS}ms cubic-bezier(0.2, 0, 0, 1)`,
+                          }}
+                        >
+                          <div style={{ width: 40, height: 4, borderRadius: 2, background: p.onPrimary, opacity: 0.9 }} />
+                        </div>
+                      )}
                     </div>
                   );
                 });
@@ -4604,7 +4704,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
 
           {isMobile && sheet === null && (
             <button
-              onClick={addButton}
+              onClick={() => addPart("button")}
               title={t("addButton", lang)}
               aria-label={t("addButton", lang)}
               className="m3-press"
@@ -4795,6 +4895,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                   tidy={tidyState ?? "done"}
                   onTidy={() => tidy(selectedFrame)}
                   onPlace={(pl) => setPlace(selectedFrame, pl)}
+                  minLength={selectedMinLength}
+                  onLength={(length) => setFrameLength(selectedFrame.id, length)}
                   ai={{ ready: aiReady, reason: aiReason, busy: aiBusy && aiFrameId === selectedFrame.id, onRun: () => runAi("describe", selectedFrame), onCancel: cancelAi }}
                   projectContext={projectContext}
                 />
@@ -4819,8 +4921,7 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                   onDuplicate={duplicateSelected}
                   locked={selectedLocked}
                   onToggleLock={toggleLockSelected}
-                  onAlign={alignSelected}
-                  onPlace={placeSelected}
+                  onPlace={selectionPlaceable ? placeSelected : undefined}
                   widths={widths}
                   selfRect={selectedRect}
                   allFrames={frames}
@@ -4828,6 +4929,8 @@ export default function Editor({ initialLang, onReady }: { initialLang: Lang; on
                   onShowMenu={onShowMenu}
                   multi={selectedIds.length}
                   grouped={!!selectedGroup}
+                  selectionWhole={selectionWhole}
+                  selectionKey={selectedIds.join(" ")}
                   onGroup={groupSelected}
                   onUngroup={ungroupSelected}
                   projectContext={projectContext}

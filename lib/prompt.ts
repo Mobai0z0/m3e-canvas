@@ -35,6 +35,7 @@ import {
   defaultPlatformOf,
   explodeGroup,
   frameOfGroup,
+  frameLengthOf,
   frameRect,
   frameSizeOf,
   cardImagePosOf,
@@ -42,6 +43,7 @@ import {
   cardImageSizeOf,
   groupBounds,
   isPhoneFrame,
+  scrollsOf,
   isWideRail,
   normalizeTheme,
   paletteOf,
@@ -281,6 +283,15 @@ function fabMenuText(it: Item, lang: Lang): string {
   return `; tapping it raises a menu of ${n} items (${items}) above the button and turns its icon into close (the M3 Expressive FloatingActionButtonMenu)`;
 }
 
+/** the optional scroll transform for an extended FAB, including its trailing-edge anchor */
+function fabScrollText(it: Item, lang: Lang): string {
+  if (!it.collapseOnScroll || !it.icon) return "";
+  if (lang === "ja") return "。本文を下へスクロールするとアイコンのみの標準 FAB に右側へ縮まり（右端は固定）、スクロールを止めても縮んだまま。上へスクロールすると拡張 FAB に戻る";
+  if (lang === "zh") return "。正文向下滚动时向右收起为仅显示图标的标准 FAB（右边缘固定），停止滚动后仍保持收起；向上滚动时恢复为扩展 FAB";
+  if (lang === "ko") return ". 본문을 아래로 스크롤하면 오른쪽으로 아이콘만 표시하는 표준 FAB까지 접히고(오른쪽 가장자리 고정) 스크롤을 멈춰도 접힌 상태를 유지하며, 위로 스크롤하면 확장 FAB로 돌아온다";
+  return "; when the body scrolls down, it collapses toward the right into an icon-only standard FAB (right edge fixed) and stays collapsed after scrolling stops; scrolling up expands it back to the extended FAB";
+}
+
 /** what a split button's arrow opens, and which way it goes */
 function splitMenuText(it: Item, lang: Lang): string {
   if (!splitOpens(it)) return "";
@@ -311,7 +322,7 @@ function itemJa(it: Item): string {
     case "fab":
       return `${it.icon ?? "空"} アイコンの${v} FAB${it.size && it.size >= 96 ? "（大サイズ）" : it.size && it.size <= 40 ? "（小サイズ）" : ""}${fabMenuText(it, "ja")}`;
     case "extendedFab":
-      return `${q(it.label)}${it.icon ? `と ${it.icon} アイコン` : ""}の拡張 FAB（${v}${it.size2 && it.size2 !== 56 ? `、高さ ${it.size2}dp` : ""}）${fabMenuText(it, "ja")}`;
+      return `${q(it.label)}${it.icon ? `と ${it.icon} アイコン` : ""}の拡張 FAB（${v}${it.size2 && it.size2 !== 56 ? `、高さ ${it.size2}dp` : ""}）${fabMenuText(it, "ja")}${fabScrollText(it, "ja")}`;
     case "chip":
       return `${q(it.label)}のチップ${it.checked ? "（選択状態）" : ""}${it.icon && !it.checked ? `（${it.icon} アイコン付き）` : ""}${chipHeightText(it, "ja")}`;
     case "topAppBar":
@@ -408,7 +419,7 @@ function itemEn(it: Item): string {
     case "fab":
       return `a ${it.size && it.size >= 96 ? "large " : it.size && it.size <= 40 ? "small " : ""}${v} FAB with the ${it.icon ?? "empty"} icon${fabMenuText(it, "en")}`;
     case "extendedFab":
-      return `a ${v} extended FAB ${q(it.label)}${it.icon ? ` with a ${it.icon} icon` : ""}${it.size2 && it.size2 !== 56 ? ` (${it.size2}dp tall)` : ""}${fabMenuText(it, "en")}`;
+      return `a ${v} extended FAB ${q(it.label)}${it.icon ? ` with a ${it.icon} icon` : ""}${it.size2 && it.size2 !== 56 ? ` (${it.size2}dp tall)` : ""}${fabMenuText(it, "en")}${fabScrollText(it, "en")}`;
     case "chip":
       return `a chip ${q(it.label)}${it.checked ? " (selected)" : ""}${it.icon && !it.checked ? ` with a ${it.icon} icon` : ""}${chipHeightText(it, "en")}`;
     case "topAppBar":
@@ -505,7 +516,7 @@ function itemZh(it: Item): string {
     case "fab":
       return `${it.icon ?? "空"} 图标的${v} FAB${it.size && it.size >= 96 ? "（大尺寸）" : it.size && it.size <= 40 ? "（小尺寸）" : ""}${fabMenuText(it, "zh")}`;
     case "extendedFab":
-      return `${q(it.label)}${it.icon ? `和 ${it.icon} 图标` : ""}的扩展 FAB（${v}${it.size2 && it.size2 !== 56 ? `，高 ${it.size2}dp` : ""}）${fabMenuText(it, "zh")}`;
+      return `${q(it.label)}${it.icon ? `和 ${it.icon} 图标` : ""}的扩展 FAB（${v}${it.size2 && it.size2 !== 56 ? `，高 ${it.size2}dp` : ""}）${fabMenuText(it, "zh")}${fabScrollText(it, "zh")}`;
     case "chip":
       return `${q(it.label)}标签片${it.checked ? "（选中状态）" : ""}${it.icon && !it.checked ? `（带 ${it.icon} 图标）` : ""}${chipHeightText(it, "zh")}`;
     case "topAppBar":
@@ -595,7 +606,7 @@ function itemKo(it: Item): string {
     case "timePicker": return `${TIME_TEXT.ko[timeLayoutOf(it)]} 형태의 시간 선택기(현재 시각 선택됨, AM/PM 전환과 취소 / 확인)`;
     case "iconButton": return `${it.icon ?? "빈"} 아이콘의 ${v} 아이콘 버튼${iconButtonSize(it, "ko")}`;
     case "fab": return `${it.icon ?? "빈"} 아이콘의 ${v} FAB${it.size && it.size >= 96 ? "(대형)" : it.size && it.size <= 40 ? "(소형)" : ""}${fabMenuText(it, "ko")}`;
-    case "extendedFab": return `${q(it.label)}${it.icon ? ` 및 ${it.icon} 아이콘` : ""} 확장 FAB(${v}${it.size2 && it.size2 !== 56 ? `, 높이 ${it.size2}dp` : ""})${fabMenuText(it, "ko")}`;
+    case "extendedFab": return `${q(it.label)}${it.icon ? ` 및 ${it.icon} 아이콘` : ""} 확장 FAB(${v}${it.size2 && it.size2 !== 56 ? `, 높이 ${it.size2}dp` : ""})${fabMenuText(it, "ko")}${fabScrollText(it, "ko")}`;
     case "chip": return `${q(it.label)} 칩${it.checked ? "(선택됨)" : ""}${it.icon && !it.checked ? `(${it.icon} 아이콘 포함)` : ""}${chipHeightText(it, "ko")}`;
     case "topAppBar": return `제목이 ${q(it.label)}인 상단 앱 바${topBarSizeText(it, "ko")}${it.icon ? `, 왼쪽 ${it.icon}` : ""}${it.icon2 ? `, 오른쪽 ${it.icon2}` : ""}${it.icon || it.icon2 ? " 아이콘 버튼" : ""}`;
     case "bottomNav": {
@@ -676,6 +687,15 @@ function boxCorners(it: Item, lang: Lang): string {
 }
 
 const itemText = (it: Item, lang: Lang) => (lang === "ja" ? itemJa(it) : lang === "zh" ? itemZh(it) : lang === "ko" ? itemKo(it) : itemEn(it));
+
+/** A collapse-on-scroll FAB only has that behavior on a screen whose body actually scrolls. */
+function promptGroupsForScroll(groups: Group[], scrollable: boolean): Group[] {
+  if (scrollable) return groups;
+  return groups.map((g) => ({
+    ...g,
+    items: g.items.map((it) => it.collapseOnScroll ? { ...it, collapseOnScroll: undefined } : it),
+  }));
+}
 
 /* ================= connected runs ================= */
 
@@ -967,6 +987,62 @@ function rowText(row: LNode[], where: string, lang: Lang, within: Rect): string 
   return `${where}, in one row from left to right: ${descs.join(", ")} (keep them on the same line, vertically centered; never stack or wrap them${stretch}).`;
 }
 
+/** kinds whose side-by-side rows can read as one grid */
+const GRID_KINDS: Kind[] = ["card", "image"];
+/** the farthest two column edges or cell widths may be apart and still count as one grid */
+const GRID_SNAP = 6;
+
+type Grid = { rows: LNode[][]; cols: number; colGap: number; rowGap: number };
+
+/** Rows starting at `from` that line up as a grid: single cards (or single images) of one
+ *  kind, at least two rows of at least two cells, every row with the same column count
+ *  except a shorter last one, columns sharing their left edges and all cells one width.
+ *  Anything with parts on top of it is left to the row-by-row description. */
+function gridAt(rows: LNode[][], from: number): Grid | null {
+  const first = rows[from];
+  if (first.length < 2) return null;
+  const kind = first[0].g.items[0].kind;
+  if (!GRID_KINDS.includes(kind)) return null;
+  const cell = (n: LNode) => n.g.items.length === 1 && n.g.items[0].kind === kind && !n.children.length;
+  const width = first[0].bb.r - first[0].bb.l;
+  const fits = (row: LNode[]) =>
+    row.length <= first.length &&
+    row.every((n, j) => cell(n) && Math.abs(n.bb.l - first[j].bb.l) <= GRID_SNAP && Math.abs(n.bb.r - n.bb.l - width) <= GRID_SNAP);
+  if (!fits(first)) return null;
+  const out = [first];
+  for (let i = from + 1; i < rows.length; i++) {
+    if (!fits(rows[i])) break;
+    out.push(rows[i]);
+    if (rows[i].length < first.length) break; // a short row closes the grid
+  }
+  if (out.length < 2) return null;
+  const bottom = (row: LNode[]) => Math.max(...row.map((n) => n.bb.b));
+  const top = (row: LNode[]) => Math.min(...row.map((n) => n.bb.t));
+  return {
+    rows: out,
+    cols: first.length,
+    colGap: Math.max(0, Math.round(first[1].bb.l - first[0].bb.r)),
+    rowGap: Math.max(0, Math.round(top(out[1]) - bottom(out[0]))),
+  };
+}
+
+/** the grid phrase: how many columns, the gaps, then every cell in reading order */
+function gridText(grid: Grid, where: string, lang: Lang): string {
+  const cells = grid.rows.flat();
+  const kind = cells[0].g.items[0].kind;
+  const noun = KIND_TEXT[lang][kind]?.noun ?? kind;
+  const n = cells.length;
+  const c = grid.cols;
+  const list = cells.map((x, i) => `(${i + 1}) ${groupText(x.g, lang)}`).join(lang === "en" || lang === "ko" ? "; " : "；");
+  if (lang === "ja")
+    return `${where}、${noun}${n}個を${c}列のグリッドに並べます（列の間隔 ${grid.colGap}dp、行の間隔 ${grid.rowGap}dp。セルはすべて同じ幅で、左から右へ、上の行から順に埋める。1行に並べたり縦1列に積んだりせず${c}列を保つ）: ${list}。`;
+  if (lang === "zh")
+    return `${where}，将 ${n} 个${noun}排成 ${c} 列网格（列间距 ${grid.colGap}dp，行间距 ${grid.rowGap}dp；所有单元格等宽，从左到右、从上一行开始依次填充；保持 ${c} 列，不要排成一行或竖着堆叠）：${list}。`;
+  if (lang === "ko")
+    return `${where}, ${noun} ${n}개를 ${c}열 그리드로 배치합니다(열 간격 ${grid.colGap}dp, 행 간격 ${grid.rowGap}dp. 모든 칸은 같은 너비이며 왼쪽에서 오른쪽으로, 위 행부터 채운다. 한 줄로 늘어놓거나 세로로 쌓지 않고 ${c}열을 유지): ${list}.`;
+  return `${where}, a grid of ${n} ${noun}s in ${c} columns (${grid.colGap}dp between columns, ${grid.rowGap}dp between rows; every cell the same width, filled left to right, row by row; keep ${c} columns rather than one long row or a single stack): ${list}.`;
+}
+
 function describeNodes(lines: string[], nodes: LNode[], within: Rect | null, widths: Record<string, number>, lang: Lang, depth: number, phone: boolean) {
   const rows = rowsOf(nodes);
   const pad = "  ".repeat(depth);
@@ -976,7 +1052,10 @@ function describeNodes(lines: string[], nodes: LNode[], within: Rect | null, wid
     r: Math.max(...nodes.map((n) => n.bb.r)),
     b: Math.max(...nodes.map((n) => n.bb.b)),
   };
-  rows.forEach((row, i) => {
+  for (let i = 0; i < rows.length; i++) {
+    /* rows that line up as a grid are written once, as the grid, in place of each row */
+    const grid = gridAt(rows, i);
+    const row = grid ? grid.rows.flat() : rows[i];
     const first = row[0];
     const rowRect: Rect = {
       l: Math.min(...row.map((n) => n.bb.l)),
@@ -987,6 +1066,11 @@ function describeNodes(lines: string[], nodes: LNode[], within: Rect | null, wid
     let where: string;
     if (within) where = zone(rowRect, box, lang, phone);
     else where = lang === "ja" ? (i === 0 ? "まず" : "その下に") : lang === "zh" ? (i === 0 ? "首先" : "其下方") : lang === "ko" ? (i === 0 ? "먼저" : "그 아래에") : i === 0 ? "First" : "Below that";
+    if (grid) {
+      lines.push(`${pad}- ${gridText(grid, where, lang)}`);
+      i += grid.rows.length - 1;
+      continue;
+    }
     /* a part that partly covers an earlier sibling is drawn on top of it */
     const overlaps: string[] = [];
     if (row.length === 1) {
@@ -1010,7 +1094,7 @@ function describeNodes(lines: string[], nodes: LNode[], within: Rect | null, wid
       );
       describeNodes(lines, n.children, n.bb, widths, lang, depth + 2, false);
     }
-  });
+  }
 }
 
 const RAIL_LEAD: Record<Lang, string> = { ja: "左端に", en: "Along the left edge: ", zh: "左缘：", ko: "왼쪽 가장자리에 " };
@@ -1489,6 +1573,7 @@ const PH = {
     empty: "画面にはまだ部品が置かれていません。",
     screens: (names: string[]) => `画面は ${names.length} つあり、${names.join("、")}です。`,
     placement: (place: Place) => (place === "center" ? "本文の部品は画面の縦中央にまとめて配置します。" : place === "bottom" ? "本文の部品は画面の下側（ナビゲーションバーの上）に寄せて配置します。" : "本文の部品は画面の高さいっぱいに均等な間隔で配置します（1 行だけなら縦中央）。"),
+    scrolls: (length: number, view: number) => `画面の長さは ${length}dp で、端末に映る ${view}dp より長いため、本文は縦にスクロールします。バーと、コンテンツの上に浮かぶ部品（FAB、スナックバーなど）はスクロールしても固定のままです。`,
     screenHead: (name: string, bg: string | undefined, has: boolean, size?: string) => `${name}画面${size || bg ? `（${[size, bg ? `背景は ${bg}` : ""].filter(Boolean).join("、")}）` : ""}${has ? "は上から順に次の通りです。重なっている部品はその旨を書いています。" : "はまだ空です。"}`,
     loose: "画面の外に置かれている部品（共通パーツや参考）:",
     freeform: "画面を上から順に説明します。",
@@ -1532,6 +1617,7 @@ const PH = {
     empty: "Nothing has been placed on the screen yet.",
     screens: (names: string[]) => `There are ${names.length} screens: ${names.join(", ")}.`,
     placement: (place: Place) => (place === "center" ? "The body parts sit together in the vertical center of the screen." : place === "bottom" ? "The body parts sit toward the bottom of the screen, above the navigation bar." : "The body parts are spread over the screen height with equal gaps (a single row sits in the vertical center)."),
+    scrolls: (length: number, view: number) => `The screen runs ${length}dp, longer than the ${view}dp the device shows, so its body scrolls vertically; the bars and anything floating over the content (a FAB, a snackbar) stay fixed while it scrolls.`,
     screenHead: (name: string, bg: string | undefined, has: boolean, size?: string) => `The ${name} screen${size || bg ? ` (${[size, bg ? `background ${bg}` : ""].filter(Boolean).join(", ")})` : ""}${has ? ", from top to bottom (overlapping parts are called out as such):" : " is still empty."}`,
     loose: "Parts placed outside the screens (shared parts or references):",
     freeform: "The screen, from top to bottom:",
@@ -1575,6 +1661,7 @@ const PH = {
     empty: "屏幕上还没有放置任何组件。",
     screens: (names: string[]) => `共有 ${names.length} 个屏幕：${names.join("、")}。`,
     placement: (place: Place) => (place === "center" ? "内容作为整体，在屏幕内容区域内纵向居中排列。" : place === "bottom" ? "内容区域中的组件靠屏幕底部（导航栏上方）放置。" : "各行内容在屏幕内容区域内纵向均匀分布（只有一行时纵向居中）。"),
+    scrolls: (length: number, view: number) => `屏幕总长 ${length}dp，超过设备可显示的 ${view}dp，因此内容区域可纵向滚动；栏以及浮在内容之上的组件（FAB、Snackbar 等）在滚动时保持固定。`,
     screenHead: (name: string, bg: string | undefined, has: boolean, size?: string) => `${name}屏幕${size || bg ? `（${[size, bg ? `背景为 ${bg}` : ""].filter(Boolean).join("，")}）` : ""}${has ? "从上到下依次如下（重叠的组件会特别说明）：" : "目前为空。"}`,
     loose: "放在屏幕之外的组件（公共部件或参考）：",
     freeform: "从上到下说明屏幕内容：",
@@ -1603,6 +1690,7 @@ const PH = {
     empty: "화면에 아직 부품이 없습니다.",
     screens: (names: string[]) => `화면은 ${names.length}개이며 ${names.join(", ")}입니다.`,
     placement: (place: Place) => (place === "center" ? "본문 부품은 화면 세로 가운데에 모아 배치한다." : place === "bottom" ? "본문 부품은 화면 아래쪽(내비게이션 바 위)에 붙여 배치한다." : "본문 부품은 화면 높이에 걸쳐 같은 간격으로 배치한다(한 줄뿐이면 세로 가운데)."),
+    scrolls: (length: number, view: number) => `화면 길이는 ${length}dp로 기기에 보이는 ${view}dp보다 길어서 본문이 세로로 스크롤된다. 바와 콘텐츠 위에 떠 있는 부품(FAB, 스낵바 등)은 스크롤해도 고정된다.`,
     screenHead: (name: string, bg: string | undefined, has: boolean, size?: string) => `${name} 화면${size || bg ? `(${[size, bg ? `배경 ${bg}` : ""].filter(Boolean).join(", ")})` : ""}. ${has ? "위에서부터 다음과 같습니다. 겹친 부품은 별도로 표시합니다." : "아직 비어 있습니다."}`,
     loose: "화면 밖에 놓인 부품(공통 부품 또는 참고):",
     freeform: "화면을 위에서부터 설명합니다.",
@@ -1759,16 +1847,17 @@ export function buildPrompt(doc: Doc, widths: Record<string, number>, onlyFrameI
       if (hasText(f.note)) lines.push(lang === "ja" || lang === "zh" ? `${trimEnd(f.note!)}。` : `${trimEnd(f.note!)}.`);
       lines.push(ph.screenHead(q(f.name || ph.screen), f.bg && f.bg !== "surface" ? f.bg : undefined, gs.length > 0, sizeLabel(f, viewport, lang)));
       if (gs.length > 0 && f.place && f.place !== "top") lines.push(ph.placement(f.place));
-      describeScreen(lines, gs, frameRect(f), widths, lang);
+      if (gs.length > 0 && scrollsOf(f)) lines.push(ph.scrolls(frameLengthOf(f), frameSizeOf(f).h));
+      describeScreen(lines, promptGroupsForScroll(gs, scrollsOf(f)), frameRect(f), widths, lang);
     });
     if (loose.length && !only) {
       lines.push("");
       lines.push(ph.loose);
-      describeScreen(lines, loose, null, widths, lang);
+      describeScreen(lines, promptGroupsForScroll(loose, false), null, widths, lang);
     }
   } else {
     lines.push(ph.freeform);
-    describeScreen(lines, groups, null, widths, lang);
+    describeScreen(lines, promptGroupsForScroll(groups, false), null, widths, lang);
   }
 
   const behavior = [...groups.flatMap((g) => notes(g, allFrames, lang)), ...frames.flatMap((f) => swipeNotes(f, allFrames, lang))];

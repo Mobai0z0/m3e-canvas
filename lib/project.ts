@@ -22,6 +22,7 @@ const validItem = (item: unknown) =>
   validCorners(item.corners) &&
   (item.railExpanded === undefined || typeof item.railExpanded === "boolean") &&
   (item.railModal === undefined || typeof item.railModal === "boolean") &&
+  (item.collapseOnScroll === undefined || typeof item.collapseOnScroll === "boolean") &&
   (item.trackThickness === undefined || isTrackThickness(item.trackThickness)) &&
   (item.imagePos === undefined || isCardImagePos(item.imagePos)) &&
   (item.imageSize === undefined || (Number.isFinite(item.imageSize) && (item.imageSize as number) > 0)) &&
@@ -39,6 +40,11 @@ const validItem = (item: unknown) =>
   (item.note === undefined || typeof item.note === "string") &&
   (item.layout === undefined || (typeof item.layout === "string" && LAYOUTS.has(item.layout))) &&
   optionalNumber(item.count) &&
+  optionalNumber(item.size) &&
+  optionalNumber(item.size2) &&
+  optionalNumber(item.radiusTop) &&
+  optionalNumber(item.radiusBottom) &&
+  optionalNumber(item.value) &&
   validTabs(item.tabs);
 
 const validGroup = (group: unknown) =>
@@ -61,7 +67,8 @@ const validFrame = (frame: unknown) =>
   (frame.w === undefined || (Number.isFinite(frame.w) && (frame.w as number) > 0)) &&
   (frame.h === undefined || (Number.isFinite(frame.h) && (frame.h as number) > 0)) &&
   (frame.note === undefined || typeof frame.note === "string") &&
-  (frame.place === undefined || isPlace(frame.place));
+  (frame.place === undefined || isPlace(frame.place)) &&
+  (frame.length === undefined || (Number.isFinite(frame.length) && (frame.length as number) > 0));
 
 /** whether a parsed file has the shape of a document the editor can open */
 export const isProject = (value: unknown): value is Doc =>

@@ -385,3 +385,89 @@ describe("bottom sheet", () => {
     expect(prompt).not.toContain("modal bottom sheets");
   });
 });
+
+describe("cards and images laid out as a grid", () => {
+  afterEach(() => setGlobalLang("ja"));
+
+  const GRID: Record<Lang, (cols: number) => string> = {
+    ja: (c) => `${c}列のグリッド`,
+    en: (c) => `in ${c} columns`,
+    zh: (c) => `${c} 列网格`,
+    ko: (c) => `${c}열 그리드`,
+  };
+  const ONE_ROW: Record<Lang, string> = { ja: "横一列に並べます", en: "in one row from left to right", zh: "横向排成一行", ko: "한 행에 다음 항목을 배치합니다" };
+
+  /* cells of `w` wide cards (or images) at the given column and row offsets inside a phone screen */
+  function layout(lang: Lang, cells: { x: number; y: number; kind?: Item["kind"]; w?: number }[]) {
+    setGlobalLang(lang);
+    const doc = fixture();
+    doc.groups = cells.map((c, i) => ({
+      id: `g${i}`,
+      x: c.x,
+      y: c.y,
+      axis: "x" as const,
+      items: [{ ...makeItem(c.kind ?? "card"), id: `c${i}`, label: `Cell ${i + 1}`, size: c.w ?? 182, size2: 200 }],
+    }));
+    const prompt = buildPrompt(doc, {}, undefined, lang);
+    return prompt.slice(prompt.indexOf(SECTIONS[lang][2]), prompt.indexOf(SECTIONS[lang][4]));
+  }
+  const square = (cols: number, count: number, kind?: Item["kind"]) =>
+    Array.from({ length: count }, (_, i) => ({ x: 16 + (i % cols) * 198, y: 100 + Math.floor(i / cols) * 216, kind }));
+
+  it.each(LANGS)("writes aligned rows of cards as one grid with its gaps, every cell in reading order, in %s", (lang) => {
+    const text = layout(lang, square(2, 4));
+    expect(text).toContain(GRID[lang](2));
+    expect(text).toContain("16dp");
+    expect(text).not.toContain(ONE_ROW[lang]);
+    const at = [1, 2, 3, 4].map((n) => text.indexOf(`Cell ${n}`));
+    expect(at.every((p) => p >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+  });
+
+  it.each(LANGS)("keeps a shorter last row inside the grid in %s", (lang) => {
+    const text = layout(lang, square(2, 3));
+    expect(text).toContain(GRID[lang](2));
+    expect(text).toContain("Cell 3");
+    expect(text).not.toContain(ONE_ROW[lang]);
+  });
+
+  it.each(LANGS)("reads images the same way in %s", (lang) => {
+    expect(layout(lang, square(2, 4, "image"))).toContain(GRID[lang](2));
+  });
+
+  it.each(LANGS)("leaves a single row, mixed kinds and cells off the columns as rows in %s", (lang) => {
+    expect(layout(lang, square(2, 2))).not.toContain(GRID[lang](2));
+    const mixed = square(2, 4).map((c, i) => (i === 3 ? { ...c, kind: "image" as const } : c));
+    expect(layout(lang, mixed)).toContain(ONE_ROW[lang]);
+    const shifted = square(2, 4).map((c, i) => (i === 2 ? { ...c, x: c.x + 40 } : c));
+    expect(layout(lang, shifted)).not.toContain(GRID[lang](2));
+    const narrow = square(2, 4).map((c, i) => (i === 3 ? { ...c, w: 160 } : c));
+    expect(layout(lang, narrow)).not.toContain(GRID[lang](2));
+  });
+});
+
+describe("a screen whose body scrolls", () => {
+  const SCROLLS: Record<Lang, string> = {
+    ja: "画面の長さは 1784dp で、端末に映る 892dp より長いため、本文は縦にスクロールします。",
+    en: "The screen runs 1784dp, longer than the 892dp the device shows, so its body scrolls vertically;",
+    zh: "屏幕总长 1784dp，超过设备可显示的 892dp，因此内容区域可纵向滚动；",
+    ko: "화면 길이는 1784dp로 기기에 보이는 892dp보다 길어서 본문이 세로로 스크롤된다.",
+  };
+  const prompt = (lang: Lang, length?: number) => {
+    setGlobalLang(lang);
+    const doc = fixture();
+    return buildPrompt({ ...doc, frames: [{ ...doc.frames[0], length }] }, {}, undefined, lang);
+  };
+
+  it.each(LANGS)("says so under the screen's heading (%s)", (lang) => {
+    const ls = lines(prompt(lang, 1784));
+    const at = ls.findIndex((l) => l.includes(SCROLLS[lang]));
+    expect(at).toBeGreaterThan(ls.indexOf(SECTIONS[lang][2]));
+    expect(at).toBeLessThan(ls.indexOf(SECTIONS[lang][3]));
+  });
+
+  it.each(LANGS)("says nothing of scrolling for a screen the device holds (%s)", (lang) => {
+    expect(prompt(lang)).not.toContain(SCROLLS[lang]);
+    expect(prompt(lang, 892)).not.toContain(SCROLLS[lang]);
+  });
+});
