@@ -20,8 +20,8 @@
   "dependencies": {
     "@babel/parser": "^7.29.8",
     "@babel/traverse": "^7.29.8",
-    "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/api": "~2.11.1",
+    "@tauri-apps/plugin-dialog": "~2.7.3",
     "html-to-image": "^1.11.13",
     "motion": "^13.4.4",
     "next": "16.4.2",
